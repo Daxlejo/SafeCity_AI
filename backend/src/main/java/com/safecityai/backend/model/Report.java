@@ -38,9 +38,10 @@ public class Report {
     @Column(name = "report_date", updatable = false)
     private LocalDateTime reportDate;
 
+    @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private ReportStatus status;
+    private ReportStatus status = ReportStatus.PENDING;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
