@@ -84,9 +84,9 @@ public class ReportController {
     @GetMapping("/nearby")
     @Operation(summary = "Buscar cercanos (Haversine)")
     public ResponseEntity<List<ReportResponseDTO>> findNearby(
-            @Parameter(description = "Latitud", example = "4.6097") @RequestParam double lat,
-            @Parameter(description = "Longitud", example = "-74.0817") @RequestParam double lng,
-            @Parameter(description = "Radio en km", example = "5") @RequestParam double radius
+            @Parameter(description = "Latitud", example = "4.6097") @RequestParam("lat") double lat,
+            @Parameter(description = "Longitud", example = "-74.0817") @RequestParam("lng") double lng,
+            @Parameter(description = "Radio en km", example = "5") @RequestParam("radius") double radius
     ) {
         List<ReportResponseDTO> reports = reportService.findNearbyReports(lat, lng, radius);
         return ResponseEntity.ok(reports);
@@ -95,10 +95,10 @@ public class ReportController {
     @GetMapping("/zone")
     @Operation(summary = "Buscar por zona (Bounding Box)")
     public ResponseEntity<List<ReportResponseDTO>> findByZone(
-            @Parameter(description = "Latitud min (sur)") @RequestParam double latMin,
-            @Parameter(description = "Latitud max (norte)") @RequestParam double latMax,
-            @Parameter(description = "Longitud min (oeste)") @RequestParam double lngMin,
-            @Parameter(description = "Longitud max (este)") @RequestParam double lngMax
+            @Parameter(description = "Latitud min (sur)") @RequestParam("latMin") double latMin,
+            @Parameter(description = "Latitud max (norte)") @RequestParam("latMax") double latMax,
+            @Parameter(description = "Longitud min (oeste)") @RequestParam("lngMin") double lngMin,
+            @Parameter(description = "Longitud max (este)") @RequestParam("lngMax") double lngMax
     ) {
         List<ReportResponseDTO> reports = reportService.findReportsByZone(latMin, latMax, lngMin, lngMax);
         return ResponseEntity.ok(reports);

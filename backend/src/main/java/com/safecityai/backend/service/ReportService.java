@@ -174,10 +174,10 @@ public class ReportService {
 
     private void validateCoordinates(double lat, double lng) {
         if (lat < -90 || lat > 90) {
-            throw new IllegalArgumentException("Latitud fuera de rango: " + lat);
+            throw new IllegalArgumentException("latitud fuera de rango: " + lat);
         }
         if (lng < -180 || lng > 180) {
-            throw new IllegalArgumentException("Longitud fuera de rango: " + lng);
+            throw new IllegalArgumentException("longitud fuera de rango: " + lng);
         }
     }
 }
