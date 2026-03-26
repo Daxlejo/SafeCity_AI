@@ -1,103 +1,104 @@
 package com.safecityai.backend.controller;
 
+import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.service.ReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 /**
- * Controller REST para operaciones geoespaciales con reportes.
- *
- * Endpoints disponibles:
- * - GET /reports/nearby  → Reportes cercanos a un punto (radio en km)
- * - GET /reports/zone    → Reportes dentro de una zona rectangular
- *
- * Todos los endpoints devuelven List<ReportResponseDTO> para no exponer
- * la entidad JPA directamente al cliente.
+ * Controller REST para operaciones con reportes.
+ * 
+ * Fusionado: CRUD completo + búsquedas geoespaciales.
  */
 @RestController
-@RequestMapping("/reports")
-@Tag(name = "Reports - Geoespacial", description = "Consultas geoespaciales de reportes")
+@RequestMapping("/api/v1/reports")
+@RequiredArgsConstructor
+@Tag(name = "Reports", description = "Operaciones de CRUD y consultas geoespaciales de reportes")
 public class ReportController {
 
     private final ReportService reportService;
 
-    public ReportController(ReportService reportService) {
-        this.reportService = reportService;
+    // ─────────────── CRUD BÁSICO ───────────────
+
+    @PostMapping
+    @Operation(summary = "Crear reporte", description = "Crea un nuevo reporte y notifica via WebSocket")
+    public ResponseEntity<ReportResponseDTO> createReport(
+            @Valid @RequestBody ReportCreateDTO dto) {
+        ReportResponseDTO response = reportService.createReport(dto);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
-    /**
-     * GET /reports/nearby?lat=4.6097&lng=-74.0817&radius=5
-     *
-     * Busca reportes cercanos a un punto geográfico dentro de un radio.
-     *
-     * Ejemplo de uso desde el frontend:
-     * - El usuario abre el mapa y su GPS marca lat=4.6097, lng=-74.0817 (Bogotá)
-     * - Quiere ver reportes a máximo 5 km → radius=5
-     * - El frontend hace: fetch("/api/reports/nearby?lat=4.6097&lng=-74.0817&radius=5")
-     *
-     * @param lat    Latitud del punto central (obligatorio)
-     * @param lng    Longitud del punto central (obligatorio)
-     * @param radius Radio de búsqueda en kilómetros (obligatorio)
-     * @return 200 OK con lista de reportes, o 400 si parámetros inválidos
-     */
+    @GetMapping("/{id}")
+    @Operation(summary = "Obtener por ID")
+    public ResponseEntity<ReportResponseDTO> getReportById(@PathVariable Long id) {
+        ReportResponseDTO response = reportService.getReportById(id);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping
+    @Operation(summary = "Listar todos (paginado)")
+    public ResponseEntity<Page<ReportResponseDTO>> getAllReports(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "reportDate") String sort,
+            @RequestParam(defaultValue = "DESC") String direction) {
+
+        Sort.Direction sortDirection = Sort.Direction.fromString(direction);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sort));
+
+        Page<ReportResponseDTO> reports = reportService.getAllReports(pageable);
+        return ResponseEntity.ok(reports);
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "Actualizar reporte")
+    public ResponseEntity<ReportResponseDTO> updateReport(
+            @PathVariable Long id,
+            @Valid @RequestBody ReportCreateDTO dto) {
+        ReportResponseDTO response = reportService.updateReport(id, dto);
+        return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/{id}")
+    @Operation(summary = "Eliminar reporte")
+    public ResponseEntity<Void> deleteReport(@PathVariable Long id) {
+        reportService.deleteReport(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ─────────────── GEOESPACIAL ───────────────
+
     @GetMapping("/nearby")
-    @Operation(
-            summary = "Buscar reportes cercanos",
-            description = "Encuentra reportes dentro de un radio (km) desde un punto usando la fórmula de Haversine"
-    )
+    @Operation(summary = "Buscar cercanos (Haversine)")
     public ResponseEntity<List<ReportResponseDTO>> findNearby(
-            @Parameter(description = "Latitud del punto central", example = "4.6097")
-            @RequestParam double lat,
-
-            @Parameter(description = "Longitud del punto central", example = "-74.0817")
-            @RequestParam double lng,
-
-            @Parameter(description = "Radio de búsqueda en km", example = "5")
-            @RequestParam double radius
+            @Parameter(description = "Latitud", example = "4.6097") @RequestParam double lat,
+            @Parameter(description = "Longitud", example = "-74.0817") @RequestParam double lng,
+            @Parameter(description = "Radio en km", example = "5") @RequestParam double radius
     ) {
         List<ReportResponseDTO> reports = reportService.findNearbyReports(lat, lng, radius);
         return ResponseEntity.ok(reports);
     }
 
-    /**
-     * GET /reports/zone?latMin=4.55&latMax=4.65&lngMin=-74.12&lngMax=-74.05
-     *
-     * Busca reportes dentro de un rectángulo geográfico (bounding box).
-     *
-     * Ejemplo de uso desde el frontend:
-     * - El usuario arrastra el mapa para ver una zona específica
-     * - El frontend calcula las coordenadas de las esquinas visibles
-     * - Hace: fetch("/api/reports/zone?latMin=4.55&latMax=4.65&lngMin=-74.12&lngMax=-74.05")
-     *
-     * @param latMin Latitud mínima - borde sur (obligatorio)
-     * @param latMax Latitud máxima - borde norte (obligatorio)
-     * @param lngMin Longitud mínima - borde oeste (obligatorio)
-     * @param lngMax Longitud máxima - borde este (obligatorio)
-     * @return 200 OK con lista de reportes, o 400 si parámetros inválidos
-     */
     @GetMapping("/zone")
-    @Operation(
-            summary = "Buscar reportes por zona",
-            description = "Encuentra reportes dentro de un rectángulo geográfico (bounding box)"
-    )
+    @Operation(summary = "Buscar por zona (Bounding Box)")
     public ResponseEntity<List<ReportResponseDTO>> findByZone(
-            @Parameter(description = "Latitud mínima (sur)", example = "4.55")
-            @RequestParam double latMin,
-
-            @Parameter(description = "Latitud máxima (norte)", example = "4.65")
-            @RequestParam double latMax,
-
-            @Parameter(description = "Longitud mínima (oeste)", example = "-74.12")
-            @RequestParam double lngMin,
-
-            @Parameter(description = "Longitud máxima (este)", example = "-74.05")
-            @RequestParam double lngMax
+            @Parameter(description = "Latitud min (sur)") @RequestParam double latMin,
+            @Parameter(description = "Latitud max (norte)") @RequestParam double latMax,
+            @Parameter(description = "Longitud min (oeste)") @RequestParam double lngMin,
+            @Parameter(description = "Longitud max (este)") @RequestParam double lngMax
     ) {
         List<ReportResponseDTO> reports = reportService.findReportsByZone(latMin, latMax, lngMin, lngMax);
         return ResponseEntity.ok(reports);

@@ -1,106 +1,164 @@
 package com.safecityai.backend.service;
 
+import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
+import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.repository.ReportRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
  * Servicio que encapsula la lógica de negocio para reportes.
- *
- * ¿Por qué un Service separado del Controller?
- * 1. El Controller solo debe recibir HTTP y delegar. NO debe tener lógica.
- * 2. El Service contiene la lógica de negocio (validaciones, transformaciones).
- * 3. Así podemos testear la lógica SIN levantar un servidor HTTP.
- * 4. Si mañana agregamos seguridad (@PreAuthorize), va en el Service.
+ * 
+ * Fusionado: Incluye CRUD básico, notificaciones en tiempo real (WebSockets)
+ * y consultas geoespaciales (Haversine/Bounding Box).
  */
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class ReportService {
 
     private final ReportRepository reportRepository;
+    private final NotificationService notificationService;
 
-    /**
-     * Inyección de dependencia por constructor (recomendado sobre @Autowired en campo).
-     * Spring automáticamente inyecta el ReportRepository aquí.
-     */
-    public ReportService(ReportRepository reportRepository) {
-        this.reportRepository = reportRepository;
+    // ──────────── CRUD BÁSICO (Sprint 2 / Origin) ────────────
+
+    @Transactional
+    public ReportResponseDTO createReport(ReportCreateDTO dto) {
+        log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
+
+        Report report = convertToEntity(dto);
+        Report savedReport = reportRepository.save(report);
+        ReportResponseDTO response = convertToDTO(savedReport);
+
+        // Notificar via WebSocket DESPUÉS del save()
+        notificationService.notifyNewReport(response);
+
+        log.info("Reporte creado exitosamente con ID: {}", savedReport.getId());
+        return response;
     }
 
-    /**
-     * Busca reportes cercanos a un punto geográfico.
-     *
-     * Ejemplo: encontrar todos los robos reportados a menos de 2km
-     * de la ubicación actual del usuario.
-     *
-     * @param lat      Latitud del punto central
-     * @param lng      Longitud del punto central
-     * @param radiusKm Radio de búsqueda en kilómetros
-     * @return Lista de ReportResponseDTO con los reportes encontrados
-     * @throws IllegalArgumentException si los parámetros son inválidos
-     */
-    public List<ReportResponseDTO> findNearbyReports(double lat, double lng, double radiusKm) {
-        // Validar que las coordenadas estén en rangos válidos
-        validateCoordinates(lat, lng);
+    @Transactional(readOnly = true)
+    public ReportResponseDTO getReportById(Long id) {
+        log.debug("Buscando reporte con ID: {}", id);
+        Report report = findReportOrThrow(id);
+        return convertToDTO(report);
+    }
 
+    @Transactional(readOnly = true)
+    public Page<ReportResponseDTO> getAllReports(Pageable pageable) {
+        log.debug("Listando reportes - página: {}, tamaño: {}",
+                pageable.getPageNumber(), pageable.getPageSize());
+
+        return reportRepository.findAll(pageable)
+                .map(this::convertToDTO);
+    }
+
+    @Transactional
+    public ReportResponseDTO updateReport(Long id, ReportCreateDTO dto) {
+        log.info("Actualizando reporte con ID: {}", id);
+
+        Report report = findReportOrThrow(id);
+        updateEntityFields(report, dto);
+        Report updatedReport = reportRepository.save(report);
+        ReportResponseDTO response = convertToDTO(updatedReport);
+
+        notificationService.notifyReportUpdated(response);
+
+        log.info("Reporte ID: {} actualizado exitosamente", id);
+        return response;
+    }
+
+    @Transactional
+    public void deleteReport(Long id) {
+        log.info("Eliminando reporte con ID: {}", id);
+
+        if (!reportRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Reporte", "id", id);
+        }
+        reportRepository.deleteById(id);
+        notificationService.notifyReportDeleted(id);
+
+        log.info("Reporte ID: {} eliminado exitosamente", id);
+    }
+
+    // ──────────── CONSULTAS GEOESPACIALES (Sprint 2 / Geospatial) ────────────
+
+    /**
+     * Busca reportes cercanos a un punto geográfico (Haversine).
+     */
+    @Transactional(readOnly = true)
+    public List<ReportResponseDTO> findNearbyReports(double lat, double lng, double radiusKm) {
+        validateCoordinates(lat, lng);
         if (radiusKm <= 0) {
             throw new IllegalArgumentException("El radio debe ser mayor a 0 km");
         }
 
+        log.debug("Buscando reportes cerca de [{}, {}] en radio de {}km", lat, lng, radiusKm);
         List<Report> reports = reportRepository.findNearby(lat, lng, radiusKm);
         return reports.stream()
-                .map(this::toResponseDTO)
+                .map(this::convertToDTO)
                 .collect(Collectors.toList());
     }
 
     /**
      * Busca reportes dentro de una zona rectangular (bounding box).
-     *
-     * Ejemplo: cuando el usuario mueve el mapa, el frontend envía
-     * las coordenadas de las 4 esquinas visibles para cargar solo
-     * los reportes de esa área.
-     *
-     * @param latMin Latitud mínima (borde sur)
-     * @param latMax Latitud máxima (borde norte)
-     * @param lngMin Longitud mínima (borde oeste)
-     * @param lngMax Longitud máxima (borde este)
-     * @return Lista de ReportResponseDTO con los reportes encontrados
-     * @throws IllegalArgumentException si los parámetros son inválidos
      */
+    @Transactional(readOnly = true)
     public List<ReportResponseDTO> findReportsByZone(double latMin, double latMax,
                                                      double lngMin, double lngMax) {
-        // Validar que min < max
-        if (latMin > latMax) {
-            throw new IllegalArgumentException("latMin no puede ser mayor que latMax");
-        }
-        if (lngMin > lngMax) {
-            throw new IllegalArgumentException("lngMin no puede ser mayor que lngMax");
-        }
-
-        // Validar rangos de coordenadas
+        if (latMin > latMax) throw new IllegalArgumentException("latMin > latMax");
+        if (lngMin > lngMax) throw new IllegalArgumentException("lngMin > lngMax");
+        
         validateCoordinates(latMin, lngMin);
         validateCoordinates(latMax, lngMax);
 
+        log.debug("Buscando reportes en zona: lat[{} a {}], lng[{} a {}]", latMin, latMax, lngMin, lngMax);
         List<Report> reports = reportRepository.findByZone(latMin, latMax, lngMin, lngMax);
         return reports.stream()
-                .map(this::toResponseDTO)
+                .map(this::convertToDTO)
                 .collect(Collectors.toList());
     }
 
-    // ──────────── MÉTODOS PRIVADOS ────────────
+    // ──────────── HELPERS ────────────
 
-    /**
-     * Convierte una entidad Report → ReportResponseDTO.
-     *
-     * Se usa el patrón Builder de Lombok para crear el DTO.
-     * En un proyecto más grande, se usaría MapStruct para esto
-     * (ya está configurado en pom.xml), pero para pocos campos
-     * el mapeo manual es más explícito y fácil de entender.
-     */
-    private ReportResponseDTO toResponseDTO(Report report) {
+    private Report findReportOrThrow(Long id) {
+        return reportRepository.findById(id)
+                .orElseThrow(() -> {
+                    log.warn("Reporte no encontrado con ID: {}", id);
+                    return new ResourceNotFoundException("Reporte", "id", id);
+                });
+    }
+
+    private void updateEntityFields(Report report, ReportCreateDTO dto) {
+        if (dto.getDescription() != null) report.setDescription(dto.getDescription());
+        if (dto.getIncidentType() != null) report.setIncidentType(dto.getIncidentType());
+        if (dto.getAddress() != null) report.setAddress(dto.getAddress());
+        if (dto.getSource() != null) report.setSource(dto.getSource());
+        if (dto.getLatitude() != null) report.setLatitude(dto.getLatitude());
+        if (dto.getLongitude() != null) report.setLongitude(dto.getLongitude());
+    }
+
+    private Report convertToEntity(ReportCreateDTO dto) {
+        return Report.builder()
+                .description(dto.getDescription())
+                .incidentType(dto.getIncidentType())
+                .address(dto.getAddress())
+                .source(dto.getSource())
+                .latitude(dto.getLatitude())
+                .longitude(dto.getLongitude())
+                .build();
+    }
+
+    private ReportResponseDTO convertToDTO(Report report) {
         return ReportResponseDTO.builder()
                 .id(report.getId())
                 .description(report.getDescription())
@@ -114,19 +172,12 @@ public class ReportService {
                 .build();
     }
 
-    /**
-     * Valida que las coordenadas estén dentro de los rangos geográficos válidos.
-     * Latitud:  -90 a 90   (sur a norte)
-     * Longitud: -180 a 180 (oeste a este)
-     */
     private void validateCoordinates(double lat, double lng) {
         if (lat < -90 || lat > 90) {
-            throw new IllegalArgumentException(
-                    "La latitud debe estar entre -90 y 90. Valor recibido: " + lat);
+            throw new IllegalArgumentException("Latitud fuera de rango: " + lat);
         }
         if (lng < -180 || lng > 180) {
-            throw new IllegalArgumentException(
-                    "La longitud debe estar entre -180 y 180. Valor recibido: " + lng);
+            throw new IllegalArgumentException("Longitud fuera de rango: " + lng);
         }
     }
 }

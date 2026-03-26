@@ -78,7 +78,7 @@ class ReportControllerTest {
             when(reportService.findNearbyReports(4.6097, -74.0817, 5.0))
                     .thenReturn(List.of(dto1, dto2));
 
-            mockMvc.perform(get("/reports/nearby")
+            mockMvc.perform(get("/api/v1/reports/nearby")
                             .param("lat", "4.6097")
                             .param("lng", "-74.0817")
                             .param("radius", "5.0"))
@@ -96,7 +96,7 @@ class ReportControllerTest {
             when(reportService.findNearbyReports(6.2442, -75.5812, 1.0))
                     .thenReturn(Collections.emptyList());
 
-            mockMvc.perform(get("/reports/nearby")
+            mockMvc.perform(get("/api/v1/reports/nearby")
                             .param("lat", "6.2442")
                             .param("lng", "-75.5812")
                             .param("radius", "1.0"))
@@ -107,7 +107,7 @@ class ReportControllerTest {
         @Test
         @DisplayName("400 Bad Request si falta parámetro 'lat'")
         void nearby_missingLat_returns400() throws Exception {
-            mockMvc.perform(get("/reports/nearby")
+            mockMvc.perform(get("/api/v1/reports/nearby")
                             .param("lng", "-74.0817")
                             .param("radius", "5.0"))
                     .andExpect(status().isBadRequest());
@@ -116,7 +116,7 @@ class ReportControllerTest {
         @Test
         @DisplayName("400 Bad Request si falta parámetro 'lng'")
         void nearby_missingLng_returns400() throws Exception {
-            mockMvc.perform(get("/reports/nearby")
+            mockMvc.perform(get("/api/v1/reports/nearby")
                             .param("lat", "4.6097")
                             .param("radius", "5.0"))
                     .andExpect(status().isBadRequest());
@@ -125,7 +125,7 @@ class ReportControllerTest {
         @Test
         @DisplayName("400 Bad Request si falta parámetro 'radius'")
         void nearby_missingRadius_returns400() throws Exception {
-            mockMvc.perform(get("/reports/nearby")
+            mockMvc.perform(get("/api/v1/reports/nearby")
                             .param("lat", "4.6097")
                             .param("lng", "-74.0817"))
                     .andExpect(status().isBadRequest());
@@ -148,7 +148,7 @@ class ReportControllerTest {
             when(reportService.findReportsByZone(4.60, 4.65, -74.10, -74.05))
                     .thenReturn(List.of(dto1));
 
-            mockMvc.perform(get("/reports/zone")
+            mockMvc.perform(get("/api/v1/reports/zone")
                             .param("latMin", "4.60")
                             .param("latMax", "4.65")
                             .param("lngMin", "-74.10")
@@ -165,7 +165,7 @@ class ReportControllerTest {
             when(reportService.findReportsByZone(6.20, 6.30, -75.60, -75.50))
                     .thenReturn(Collections.emptyList());
 
-            mockMvc.perform(get("/reports/zone")
+            mockMvc.perform(get("/api/v1/reports/zone")
                             .param("latMin", "6.20")
                             .param("latMax", "6.30")
                             .param("lngMin", "-75.60")
@@ -177,7 +177,7 @@ class ReportControllerTest {
         @Test
         @DisplayName("400 Bad Request si falta parámetro 'latMin'")
         void zone_missingLatMin_returns400() throws Exception {
-            mockMvc.perform(get("/reports/zone")
+            mockMvc.perform(get("/api/v1/reports/zone")
                             .param("latMax", "4.65")
                             .param("lngMin", "-74.10")
                             .param("lngMax", "-74.05"))
@@ -187,7 +187,7 @@ class ReportControllerTest {
         @Test
         @DisplayName("400 Bad Request si falta parámetro 'lngMax'")
         void zone_missingLngMax_returns400() throws Exception {
-            mockMvc.perform(get("/reports/zone")
+            mockMvc.perform(get("/api/v1/reports/zone")
                             .param("latMin", "4.60")
                             .param("latMax", "4.65")
                             .param("lngMin", "-74.10"))
