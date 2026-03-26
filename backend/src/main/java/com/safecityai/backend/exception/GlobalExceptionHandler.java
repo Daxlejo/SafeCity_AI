@@ -61,6 +61,41 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 400 - BAD REQUEST
+     * Se dispara cuando falta un parámetro obligatorio (@RequestParam).
+     * Ejemplo: GET /reports/nearby sin el parámetro "lat".
+     */
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingParam(
+            org.springframework.web.bind.MissingServletRequestParameterException ex) {
+
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Parámetro faltante",
+                "El parámetro '" + ex.getParameterName() + "' es obligatorio"
+        );
+
+        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * 400 - BAD REQUEST
+     * Se dispara cuando se lanza IllegalArgumentException.
+     * Ejemplo: radio negativo, coordenadas fuera de rango.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Parámetro inválido",
+                ex.getMessage()
+        );
+
+        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
      * 500 - INTERNAL SERVER ERROR
      * Captura CUALQUIER otra excepción no manejada.
      * Actúa como red de seguridad para que nunca se exponga
