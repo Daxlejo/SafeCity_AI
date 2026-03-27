@@ -10,8 +10,9 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 import java.util.Arrays;
 
 /**
- * WebSocket STOMP — orígenes dinámicos desde la misma env var que CORS.
- * En prod: CORS_ALLOWED_ORIGINS=https://safecity.vercel.app
+ * WebSocket STOMP — soporta conexión nativa (wss://) y SockJS (fallback).
+ * Endpoint nativo: /ws  →  para StompJs Client (frontend actual)
+ * Endpoint SockJS: /ws-sockjs  →  fallback para navegadores legacy
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -32,8 +33,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .map(String::trim)
                 .toArray(String[]::new);
 
+        // WebSocket nativo — para StompJs Client del frontend
         registry.addEndpoint("/ws")
-                .setAllowedOrigins(origins)
+                .setAllowedOriginPatterns("*");
+
+        // SockJS fallback — para navegadores que no soporten WebSocket
+        registry.addEndpoint("/ws-sockjs")
+                .setAllowedOriginPatterns("*")
                 .withSockJS();
     }
 }
