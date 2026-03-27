@@ -39,10 +39,10 @@ class ReportRepositoryTest {
     /*
      * Coordenadas de referencia para los tests:
      *
-     * BOGOTÁ (centro):    lat=4.6097,  lng=-74.0817
-     * REPORTE CERCANO:    lat=4.6150,  lng=-74.0750  (~0.9 km del centro)
-     * REPORTE MEDIO:      lat=4.6300,  lng=-74.0600  (~3.1 km del centro)
-     * REPORTE LEJANO:     lat=4.7100,  lng=-73.9500  (~16.5 km del centro)
+     * PASTO (centro):     lat=1.2136,  lng=-77.2811
+     * REPORTE CERCANO:    lat=1.2190,  lng=-77.2750  (~0.9 km del centro)
+     * REPORTE MEDIO:      lat=1.2350,  lng=-77.2600  (~3.3 km del centro)
+     * REPORTE LEJANO:     lat=1.3200,  lng=-77.1800  (~16.2 km del centro)
      * REPORTE SIN COORDS: lat=null,    lng=null
      */
 
@@ -58,37 +58,37 @@ class ReportRepositoryTest {
         reporteCercano = reportRepository.save(Report.builder()
                 .description("Robo a mano armada cerca al centro")
                 .incidentType(IncidentType.ROBBERY)
-                .address("Calle 10 #5-30, Bogotá")
+                .address("Calle 18 #25-30, Pasto")
                 .source(ReportSource.CITIZEN_TEXT)
                 .status(ReportStatus.PENDING)
-                .latitude(4.6150)
-                .longitude(-74.0750)
+                .latitude(1.2190)
+                .longitude(-77.2750)
                 .build());
 
         reporteMedio = reportRepository.save(Report.builder()
-                .description("Accidente de tránsito en la autopista")
+                .description("Accidente de tránsito en la zona universitaria")
                 .incidentType(IncidentType.ACCIDENT)
-                .address("Autopista Norte Km 3, Bogotá")
+                .address("Calle 18 cerca a la U Nariño, Pasto")
                 .source(ReportSource.CITIZEN_TEXT)
                 .status(ReportStatus.VERIFIED)
-                .latitude(4.6300)
-                .longitude(-74.0600)
+                .latitude(1.2350)
+                .longitude(-77.2600)
                 .build());
 
         reporteLejano = reportRepository.save(Report.builder()
                 .description("Operativo de tránsito en la periferia")
                 .incidentType(IncidentType.TRANSIT_OP)
-                .address("Vía La Calera, Bogotá")
+                .address("Vía al Volcán Galeras, Pasto")
                 .source(ReportSource.INSTITUTIONAL)
                 .status(ReportStatus.PENDING)
-                .latitude(4.7100)
-                .longitude(-73.9500)
+                .latitude(1.3200)
+                .longitude(-77.1800)
                 .build());
 
         reporteSinCoords = reportRepository.save(Report.builder()
                 .description("Hurto reportado sin ubicación GPS")
                 .incidentType(IncidentType.OTHER)
-                .address("Barrio Kennedy, Bogotá")
+                .address("Barrio Chapal, Pasto")
                 .source(ReportSource.CITIZEN_VOICE)
                 .status(ReportStatus.PENDING)
                 .latitude(null)
@@ -107,7 +107,7 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("Radio de 1 km → solo encuentra el reporte cercano")
         void findNearby_1km_onlyClosest() {
-            List<Report> results = reportRepository.findNearby(4.6097, -74.0817, 1.0);
+            List<Report> results = reportRepository.findNearby(1.2136, -77.2811, 1.0);
 
             assertThat(results).hasSize(1);
             assertThat(results.get(0).getId()).isEqualTo(reporteCercano.getId());
@@ -116,7 +116,7 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("Radio de 5 km → encuentra cercano y medio, excluye lejano")
         void findNearby_5km_closestAndMedium() {
-            List<Report> results = reportRepository.findNearby(4.6097, -74.0817, 5.0);
+            List<Report> results = reportRepository.findNearby(1.2136, -77.2811, 5.0);
 
             assertThat(results).hasSize(2);
             List<Long> ids = results.stream().map(Report::getId).toList();
@@ -127,7 +127,7 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("Radio de 20 km → encuentra los 3 con coordenadas, excluye el sin coords")
         void findNearby_20km_allWithCoordinates() {
-            List<Report> results = reportRepository.findNearby(4.6097, -74.0817, 20.0);
+            List<Report> results = reportRepository.findNearby(1.2136, -77.2811, 20.0);
 
             assertThat(results).hasSize(3);
             List<Long> ids = results.stream().map(Report::getId).toList();
@@ -137,8 +137,8 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("Radio de 0.1 km desde un punto sin reportes → lista vacía")
         void findNearby_noMatches_emptyList() {
-            // Punto lejano: Medellín
-            List<Report> results = reportRepository.findNearby(6.2442, -75.5812, 0.1);
+            // Punto lejano: Bogotá
+            List<Report> results = reportRepository.findNearby(4.6097, -74.0817, 0.1);
 
             assertThat(results).isEmpty();
         }
@@ -146,7 +146,7 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("No incluye reportes con coordenadas nulas")
         void findNearby_excludesNullCoordinates() {
-            List<Report> results = reportRepository.findNearby(4.6097, -74.0817, 100.0);
+            List<Report> results = reportRepository.findNearby(1.2136, -77.2811, 100.0);
 
             List<Long> ids = results.stream().map(Report::getId).toList();
             assertThat(ids).doesNotContain(reporteSinCoords.getId());
@@ -165,8 +165,8 @@ class ReportRepositoryTest {
         @DisplayName("Zona pequeña alrededor del centro → solo cercano")
         void findByZone_smallBox_onlyClosest() {
             List<Report> results = reportRepository.findByZone(
-                    4.610, 4.620,   // latMin, latMax
-                    -74.080, -74.070  // lngMin, lngMax
+                    1.2100, 1.2200,   // latMin, latMax
+                    -77.2800, -77.2700  // lngMin, lngMax
             );
 
             assertThat(results).hasSize(1);
@@ -177,8 +177,8 @@ class ReportRepositoryTest {
         @DisplayName("Zona mediana → cercano y medio")
         void findByZone_mediumBox_twoReports() {
             List<Report> results = reportRepository.findByZone(
-                    4.610, 4.640,
-                    -74.090, -74.050
+                    1.2100, 1.2400,
+                    -77.2900, -77.2500
             );
 
             assertThat(results).hasSize(2);
@@ -190,8 +190,8 @@ class ReportRepositoryTest {
         @DisplayName("Zona grande → todos los que tienen coordenadas")
         void findByZone_largeBox_allWithCoordinates() {
             List<Report> results = reportRepository.findByZone(
-                    4.50, 4.80,
-                    -74.20, -73.90
+                    1.2000, 1.4000,
+                    -77.3000, -77.1000
             );
 
             assertThat(results).hasSize(3);
@@ -202,10 +202,10 @@ class ReportRepositoryTest {
         @Test
         @DisplayName("Zona sin reportes → lista vacía")
         void findByZone_noMatches_emptyList() {
-            // Zona en Medellín
+            // Zona en Bogotá
             List<Report> results = reportRepository.findByZone(
-                    6.20, 6.30,
-                    -75.60, -75.50
+                    4.6000, 4.6200,
+                    -74.0900, -74.0800
             );
 
             assertThat(results).isEmpty();

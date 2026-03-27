@@ -75,13 +75,13 @@ class ReportServiceTest {
         @DisplayName("Devuelve DTOs correctamente mapeados desde entidades")
         void returnsCorrectDTOs() {
             // Arrange: configurar qué devuelve el mock
-            Report r1 = buildSampleReport(1L, 4.6150, -74.0750);
-            Report r2 = buildSampleReport(2L, 4.6300, -74.0600);
-            when(reportRepository.findNearby(4.6097, -74.0817, 5.0))
+            Report r1 = buildSampleReport(1L, 1.2190, -77.2750);
+            Report r2 = buildSampleReport(2L, 1.2350, -77.2600);
+            when(reportRepository.findNearby(1.2136, -77.2811, 5.0))
                     .thenReturn(List.of(r1, r2));
 
             // Act: ejecutar el método
-            List<ReportResponseDTO> result = reportService.findNearbyReports(4.6097, -74.0817, 5.0);
+            List<ReportResponseDTO> result = reportService.findNearbyReports(1.2136, -77.2811, 5.0);
 
             // Assert: verificar resultado
             assertThat(result).hasSize(2);
@@ -91,12 +91,12 @@ class ReportServiceTest {
             assertThat(dto1.getId()).isEqualTo(1L);
             assertThat(dto1.getDescription()).isEqualTo("Reporte de prueba #1");
             assertThat(dto1.getIncidentType()).isEqualTo(IncidentType.ROBBERY);
-            assertThat(dto1.getLatitude()).isEqualTo(4.6150);
-            assertThat(dto1.getLongitude()).isEqualTo(-74.0750);
+            assertThat(dto1.getLatitude()).isEqualTo(1.2190);
+            assertThat(dto1.getLongitude()).isEqualTo(-77.2750);
             assertThat(dto1.getStatus()).isEqualTo(ReportStatus.PENDING);
 
             // Verificar que se llamó al repo exactamente 1 vez con los params correctos
-            verify(reportRepository, times(1)).findNearby(4.6097, -74.0817, 5.0);
+            verify(reportRepository, times(1)).findNearby(1.2136, -77.2811, 5.0);
         }
 
         @Test
@@ -113,11 +113,11 @@ class ReportServiceTest {
         @Test
         @DisplayName("Lanza excepción si el radio es 0 o negativo")
         void throwsExceptionForInvalidRadius() {
-            assertThatThrownBy(() -> reportService.findNearbyReports(4.6097, -74.0817, 0))
+            assertThatThrownBy(() -> reportService.findNearbyReports(1.2136, -77.2811, 0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("radio");
 
-            assertThatThrownBy(() -> reportService.findNearbyReports(4.6097, -74.0817, -5))
+            assertThatThrownBy(() -> reportService.findNearbyReports(1.2136, -77.2811, -5))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("radio");
         }
@@ -125,11 +125,11 @@ class ReportServiceTest {
         @Test
         @DisplayName("Lanza excepción si la latitud está fuera de rango")
         void throwsExceptionForInvalidLatitude() {
-            assertThatThrownBy(() -> reportService.findNearbyReports(91, -74.0817, 5.0))
+            assertThatThrownBy(() -> reportService.findNearbyReports(91, -77.2811, 5.0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("latitud");
 
-            assertThatThrownBy(() -> reportService.findNearbyReports(-91, -74.0817, 5.0))
+            assertThatThrownBy(() -> reportService.findNearbyReports(-91, -77.2811, 5.0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("latitud");
         }
@@ -137,11 +137,11 @@ class ReportServiceTest {
         @Test
         @DisplayName("Lanza excepción si la longitud está fuera de rango")
         void throwsExceptionForInvalidLongitude() {
-            assertThatThrownBy(() -> reportService.findNearbyReports(4.6097, 181, 5.0))
+            assertThatThrownBy(() -> reportService.findNearbyReports(1.2136, 181, 5.0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("longitud");
 
-            assertThatThrownBy(() -> reportService.findNearbyReports(4.6097, -181, 5.0))
+            assertThatThrownBy(() -> reportService.findNearbyReports(1.2136, -181, 5.0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("longitud");
         }
@@ -158,17 +158,17 @@ class ReportServiceTest {
         @Test
         @DisplayName("Devuelve DTOs correctamente mapeados desde entidades")
         void returnsCorrectDTOs() {
-            Report r1 = buildSampleReport(1L, 4.6150, -74.0750);
-            when(reportRepository.findByZone(4.60, 4.65, -74.10, -74.05))
+            Report r1 = buildSampleReport(1L, 1.2190, -77.2750);
+            when(reportRepository.findByZone(1.2100, 1.2500, -77.3000, -77.2000))
                     .thenReturn(List.of(r1));
 
-            List<ReportResponseDTO> result = reportService.findReportsByZone(4.60, 4.65, -74.10, -74.05);
+            List<ReportResponseDTO> result = reportService.findReportsByZone(1.2100, 1.2500, -77.3000, -77.2000);
 
             assertThat(result).hasSize(1);
             assertThat(result.get(0).getId()).isEqualTo(1L);
-            assertThat(result.get(0).getLatitude()).isEqualTo(4.6150);
+            assertThat(result.get(0).getLatitude()).isEqualTo(1.2190);
 
-            verify(reportRepository, times(1)).findByZone(4.60, 4.65, -74.10, -74.05);
+            verify(reportRepository, times(1)).findByZone(1.2100, 1.2500, -77.3000, -77.2000);
         }
 
         @Test
@@ -185,7 +185,7 @@ class ReportServiceTest {
         @Test
         @DisplayName("Lanza excepción si latMin > latMax")
         void throwsExceptionWhenLatMinGreaterThanMax() {
-            assertThatThrownBy(() -> reportService.findReportsByZone(4.70, 4.60, -74.10, -74.05))
+            assertThatThrownBy(() -> reportService.findReportsByZone(1.2500, 1.2100, -77.3000, -77.2000))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("latMin");
         }
@@ -193,7 +193,7 @@ class ReportServiceTest {
         @Test
         @DisplayName("Lanza excepción si lngMin > lngMax")
         void throwsExceptionWhenLngMinGreaterThanMax() {
-            assertThatThrownBy(() -> reportService.findReportsByZone(4.60, 4.70, -74.05, -74.10))
+            assertThatThrownBy(() -> reportService.findReportsByZone(1.2100, 1.2500, -77.2000, -77.3000))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("lngMin");
         }

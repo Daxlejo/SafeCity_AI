@@ -72,20 +72,20 @@ class ReportControllerTest {
         @Test
         @DisplayName("200 OK con reportes cercanos")
         void nearby_returnsReports() throws Exception {
-            ReportResponseDTO dto1 = buildSampleDTO(1L, 4.6150, -74.0750);
-            ReportResponseDTO dto2 = buildSampleDTO(2L, 4.6300, -74.0600);
+            ReportResponseDTO dto1 = buildSampleDTO(1L, 1.2190, -77.2750);
+            ReportResponseDTO dto2 = buildSampleDTO(2L, 1.2350, -77.2600);
 
-            when(reportService.findNearbyReports(4.6097, -74.0817, 5.0))
+            when(reportService.findNearbyReports(1.2136, -77.2811, 5.0))
                     .thenReturn(List.of(dto1, dto2));
 
             mockMvc.perform(get("/api/v1/reports/nearby")
-                            .param("lat", "4.6097")
-                            .param("lng", "-74.0817")
+                            .param("lat", "1.2136")
+                            .param("lng", "-77.2811")
                             .param("radius", "5.0"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", hasSize(2)))
                     .andExpect(jsonPath("$[0].id").value(1))
-                    .andExpect(jsonPath("$[0].latitude").value(4.6150))
+                    .andExpect(jsonPath("$[0].latitude").value(1.2190))
                     .andExpect(jsonPath("$[0].incidentType").value("ROBBERY"))
                     .andExpect(jsonPath("$[1].id").value(2));
         }
@@ -108,7 +108,7 @@ class ReportControllerTest {
         @DisplayName("400 Bad Request si falta parámetro 'lat'")
         void nearby_missingLat_returns400() throws Exception {
             mockMvc.perform(get("/api/v1/reports/nearby")
-                            .param("lng", "-74.0817")
+                            .param("lng", "-77.2811")
                             .param("radius", "5.0"))
                     .andExpect(status().isBadRequest());
         }
@@ -117,7 +117,7 @@ class ReportControllerTest {
         @DisplayName("400 Bad Request si falta parámetro 'lng'")
         void nearby_missingLng_returns400() throws Exception {
             mockMvc.perform(get("/api/v1/reports/nearby")
-                            .param("lat", "4.6097")
+                            .param("lat", "1.2136")
                             .param("radius", "5.0"))
                     .andExpect(status().isBadRequest());
         }
@@ -126,8 +126,8 @@ class ReportControllerTest {
         @DisplayName("400 Bad Request si falta parámetro 'radius'")
         void nearby_missingRadius_returns400() throws Exception {
             mockMvc.perform(get("/api/v1/reports/nearby")
-                            .param("lat", "4.6097")
-                            .param("lng", "-74.0817"))
+                            .param("lat", "1.2136")
+                            .param("lng", "-77.2811"))
                     .andExpect(status().isBadRequest());
         }
     }
@@ -143,20 +143,20 @@ class ReportControllerTest {
         @Test
         @DisplayName("200 OK con reportes en la zona")
         void zone_returnsReports() throws Exception {
-            ReportResponseDTO dto1 = buildSampleDTO(1L, 4.6150, -74.0750);
+            ReportResponseDTO dto1 = buildSampleDTO(1L, 1.2190, -77.2750);
 
-            when(reportService.findReportsByZone(4.60, 4.65, -74.10, -74.05))
+            when(reportService.findReportsByZone(1.2100, 1.2500, -77.3000, -77.2000))
                     .thenReturn(List.of(dto1));
 
             mockMvc.perform(get("/api/v1/reports/zone")
-                            .param("latMin", "4.60")
-                            .param("latMax", "4.65")
-                            .param("lngMin", "-74.10")
-                            .param("lngMax", "-74.05"))
+                            .param("latMin", "1.2100")
+                            .param("latMax", "1.2500")
+                            .param("lngMin", "-77.3000")
+                            .param("lngMax", "-77.2000"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", hasSize(1)))
                     .andExpect(jsonPath("$[0].id").value(1))
-                    .andExpect(jsonPath("$[0].latitude").value(4.6150));
+                    .andExpect(jsonPath("$[0].latitude").value(1.2190));
         }
 
         @Test
@@ -178,9 +178,9 @@ class ReportControllerTest {
         @DisplayName("400 Bad Request si falta parámetro 'latMin'")
         void zone_missingLatMin_returns400() throws Exception {
             mockMvc.perform(get("/api/v1/reports/zone")
-                            .param("latMax", "4.65")
-                            .param("lngMin", "-74.10")
-                            .param("lngMax", "-74.05"))
+                            .param("latMax", "1.2500")
+                            .param("lngMin", "-77.3000")
+                            .param("lngMax", "-77.2000"))
                     .andExpect(status().isBadRequest());
         }
 
@@ -188,9 +188,9 @@ class ReportControllerTest {
         @DisplayName("400 Bad Request si falta parámetro 'lngMax'")
         void zone_missingLngMax_returns400() throws Exception {
             mockMvc.perform(get("/api/v1/reports/zone")
-                            .param("latMin", "4.60")
-                            .param("latMax", "4.65")
-                            .param("lngMin", "-74.10"))
+                            .param("latMin", "1.2100")
+                            .param("latMax", "1.2500")
+                            .param("lngMin", "-77.3000"))
                     .andExpect(status().isBadRequest());
         }
     }
