@@ -161,8 +161,9 @@ button:disabled {
 
 .badge.robbery { background-color: #fee2e2; color: #ef4444; }
 .badge.accident { background-color: #ffedd5; color: #f97316; }
-.badge.fire { background-color: #fce7f3; color: #ec4899; }
-.badge.medical { background-color: #d1fae5; color: #10b981; }
+.badge.traffic { background-color: #fef9c3; color: #ca8a04; }
+.badge.transit_op { background-color: #dbeafe; color: #3b82f6; }
+.badge.other { background-color: #f1f5f9; color: #64748b; }
 
 .live-indicator {
   display: flex;

@@ -1,9 +1,9 @@
 const { useState, useEffect, useRef } = React;
 const { Client } = window.StompJs;
 
-// API configuration
-const BACKEND_URL = 'http://localhost:8080/api';
-const WS_URL = 'ws://localhost:8080/ws';
+// API configuration — apunta al backend desplegado en Render
+const BACKEND_URL = 'https://safecity-ai-backend.onrender.com';
+const WS_URL = 'wss://safecity-ai-backend.onrender.com/ws';
 
 function App() {
   const [reports, setReports] = useState([]);
@@ -47,7 +47,7 @@ function App() {
     }
 
     // 2. Cargar reportes iniciales vía Axios
-    axios.get(`${BACKEND_URL}/reports?size=50&sort=createdAt,desc`)
+    axios.get(`${BACKEND_URL}/api/v1/reports?size=50&sort=reportDate&direction=DESC`)
       .then(res => {
         const data = res.data.content || [];
         setReports(data);
@@ -133,7 +133,7 @@ function App() {
     };
 
     try {
-      await axios.post(`${BACKEND_URL}/reports`, dto, {
+      await axios.post(`${BACKEND_URL}/api/v1/reports`, dto, {
           headers: { 'Content-Type': 'application/json' }
       });
       setDesc('');
@@ -169,9 +169,9 @@ function App() {
                 <select value={type} onChange={e => setType(e.target.value)}>
                   <option value="ROBBERY">Robo</option>
                   <option value="ACCIDENT">Accidente</option>
-                  <option value="FIRE">Incendio</option>
-                  <option value="MEDICAL">Atención Médica</option>
-                  <option value="VANDALISM">Vandalismo</option>
+                  <option value="TRAFFIC">Tráfico</option>
+                  <option value="TRANSIT_OP">Operativo de Tránsito</option>
+                  <option value="OTHER">Otro</option>
                 </select>
               </div>
               <div className="form-group">
