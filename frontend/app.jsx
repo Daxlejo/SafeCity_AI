@@ -127,7 +127,7 @@ function App() {
       description: desc,
       incidentType: type,
       address: `Lat: ${selectedLocation.lat.toFixed(4)}, Lng: ${selectedLocation.lng.toFixed(4)}`, // Mock
-      source: 'WEB_APP',
+      source: 'CITIZEN_TEXT',
       latitude: selectedLocation.lat,
       longitude: selectedLocation.lng
     };
