@@ -81,8 +81,10 @@ public class ReportService {
     }
 
     // ═══════════════ HELPERS ═══════════════
+    // Nos ayudan a mantener el codigo limpio y organizado
 
-    // DRY: centraliza búsqueda + excepción. Punto único para agregar cache o auditoría.
+    // DRY: centraliza búsqueda + excepción. Punto único para agregar cache o
+    // auditoría.
     private Report findReportOrThrow(Long id) {
         return reportRepository.findById(id)
                 .orElseThrow(() -> {
@@ -93,12 +95,18 @@ public class ReportService {
 
     // Null-safe: si un campo llega null, preserva el valor existente en BD
     private void updateEntityFields(Report report, ReportCreateDTO dto) {
-        if (dto.getDescription() != null) report.setDescription(dto.getDescription());
-        if (dto.getIncidentType() != null) report.setIncidentType(dto.getIncidentType());
-        if (dto.getAddress() != null) report.setAddress(dto.getAddress());
-        if (dto.getSource() != null) report.setSource(dto.getSource());
-        if (dto.getLatitude() != null) report.setLatitude(dto.getLatitude());
-        if (dto.getLongitude() != null) report.setLongitude(dto.getLongitude());
+        if (dto.getDescription() != null)
+            report.setDescription(dto.getDescription());
+        if (dto.getIncidentType() != null)
+            report.setIncidentType(dto.getIncidentType());
+        if (dto.getAddress() != null)
+            report.setAddress(dto.getAddress());
+        if (dto.getSource() != null)
+            report.setSource(dto.getSource());
+        if (dto.getLatitude() != null)
+            report.setLatitude(dto.getLatitude());
+        if (dto.getLongitude() != null)
+            report.setLongitude(dto.getLongitude());
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {

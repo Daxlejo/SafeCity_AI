@@ -50,4 +50,9 @@ public class Report {
     private Double latitude;
 
     private Double longitude;
+
+    // Relación: cada reporte pertenece a un usuario
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User reportedBy;
 }
