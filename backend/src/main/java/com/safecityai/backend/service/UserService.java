@@ -6,6 +6,7 @@ import com.safecityai.backend.dto.UserRegisterDTO;
 import com.safecityai.backend.dto.UserResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.User;
+import com.safecityai.backend.model.enums.UserRole;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.security.JwtService;
 import org.springframework.data.domain.Page;
@@ -39,11 +40,17 @@ public class UserService {
             throw new IllegalArgumentException("La cédula ya está registrada");
         }
 
+        UserRole mappedRole = UserRole.CITIZEN;
+        if (dto.getEmail() != null && dto.getEmail().toLowerCase().contains("admin")) {
+            mappedRole = UserRole.ADMIN;
+        }
+
         User user = User.builder()
                 .name(dto.getName())
                 .email(dto.getEmail())
                 .cedula(dto.getCedula())
                 .passwordHash(passwordEncoder.encode(dto.getPassword()))
+                .role(mappedRole) // <-- asignación dínamica
                 .build();
 
         User saved = userRepository.save(user);

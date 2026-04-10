@@ -22,7 +22,13 @@ public class StatsSummaryDTO {
     private Long totalZones;
 
     // Conteo por tipo de incidente (para la grafica de barras)
-    private java.util.Map<String, Long> reportsByType;
+    private java.util.Map<String, Long> byType;
+
+    // Conteo por zona
+    private java.util.Map<String, Long> byZone;
+
+    // Linea de tiempo
+    private List<java.util.Map<String, Object>> timeline;
 
     // Datos para el heatmap: lista de puntos [lat, lng, intensidad]
     private List<HeatmapPointDTO> heatmapData;

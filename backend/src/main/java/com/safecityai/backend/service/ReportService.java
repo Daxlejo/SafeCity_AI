@@ -4,6 +4,7 @@ import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.Zone;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
@@ -122,6 +123,11 @@ public class ReportService {
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {
+        Zone zoneProxy = null;
+        if (dto.getZoneId() != null) {
+            zoneProxy = Zone.builder().id(dto.getZoneId()).build();
+        }
+
         return Report.builder()
                 .description(dto.getDescription())
                 .incidentType(dto.getIncidentType())
@@ -131,11 +137,17 @@ public class ReportService {
                 .longitude(dto.getLongitude())
                 .photoUrl(dto.getPhotoUrl())
                 .zoneId(dto.getZoneId())
+                .zone(zoneProxy)
                 .status(ReportStatus.PENDING)
                 .build();
     }
 
     private ReportResponseDTO convertToDTO(Report report) {
+        String zoneName = null;
+        if (report.getZone() != null && report.getZone().getName() != null) {
+            zoneName = report.getZone().getName();
+        }
+
         return ReportResponseDTO.builder()
                 .id(report.getId())
                 .description(report.getDescription())
@@ -147,7 +159,8 @@ public class ReportService {
                 .longitude(report.getLongitude())
                 .photoUrl(report.getPhotoUrl())
                 .trustScore(report.getTrustScore())
-                .zoneId(report.getZoneId())
+                .zoneId(report.getZoneId() != null ? report.getZoneId() : (report.getZone() != null ? report.getZone().getId() : null))
+                .zoneName(zoneName)
                 .reportDate(report.getReportDate())
                 .build();
     }

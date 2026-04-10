@@ -2,7 +2,6 @@ package com.safecityai.backend.controller;
 
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
-import com.safecityai.backend.dto.TypeCountDTO;
 import com.safecityai.backend.service.StatsService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +28,7 @@ public class StatsController {
 
     // GET /api/v1/stats/by-type → conteo por tipo de incidente
     @GetMapping("/by-type")
-    public ResponseEntity<List<TypeCountDTO>> getByType() {
+    public ResponseEntity<java.util.Map<String, Long>> getByType() {
         return ResponseEntity.ok(statsService.getReportsByType());
     }
 
@@ -43,5 +42,11 @@ public class StatsController {
     @GetMapping("/by-zone")
     public ResponseEntity<java.util.Map<Long, Long>> getByZone() {
         return ResponseEntity.ok(statsService.getReportsByZone());
+    }
+
+    // GET /api/v1/stats/timeline → ultimos 7 reportes por dia
+    @GetMapping("/timeline")
+    public ResponseEntity<List<java.util.Map<String, Object>>> getTimeline() {
+        return ResponseEntity.ok(statsService.getTimeline());
     }
 }

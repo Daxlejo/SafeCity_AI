@@ -2,7 +2,6 @@ package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
-import com.safecityai.backend.dto.TypeCountDTO;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.ReportStatus;
@@ -38,7 +37,9 @@ public class StatsService {
                 .rejectedReports(reportRepository.countByStatus(ReportStatus.REJECTED))
                 .totalUsers(userRepository.count())
                 .totalZones(zoneRepository.count())
-                .reportsByType(getReportsByType())
+                .byType(getReportsByType())
+                .byZone(getReportsByZoneNames())
+                .timeline(getTimeline())
                 .heatmapData(getHeatmapData())
                 .build();
     }
@@ -61,6 +62,19 @@ public class StatsService {
                 ));
     }
 
+    // Conteo por zona extraido con Nombres 
+    public java.util.Map<String, Long> getReportsByZoneNames() {
+        return reportRepository.countByZoneId().stream()
+                .filter(row -> row[0] != null)
+                .collect(Collectors.toMap(
+                        row -> zoneRepository.findById((Long) row[0])
+                                .map(z -> z.getName())
+                                .orElse("Desconocida"),
+                        row -> (Long) row[1],
+                        (existing, replacement) -> existing
+                ));
+    }
+
     // Datos para el heatmap del frontend
     public List<HeatmapPointDTO> getHeatmapData() {
         return reportRepository.findAllWithCoordinates().stream()
@@ -80,5 +94,32 @@ public class StatsService {
             case RESOLVED -> 0.3;    // Resuelto = baja
             case REJECTED -> 0.1;    // Rechazado = minima
         };
+    }
+
+    // Datos de los últimos 7 días
+    public List<java.util.Map<String, Object>> getTimeline() {
+        java.time.LocalDateTime sevenDaysAgo = java.time.LocalDateTime.now().minusDays(7);
+        // Traemos los recientes sin queries complejas para evitar conflictos de dialecto
+        List<Report> recentReports = reportRepository.findAll()
+                .stream()
+                .filter(r -> r.getReportDate() != null && r.getReportDate().isAfter(sevenDaysAgo))
+                .toList();
+
+        java.util.Map<java.time.LocalDate, Long> countsByDate = recentReports.stream()
+                .collect(Collectors.groupingBy(
+                        r -> r.getReportDate().toLocalDate(),
+                        Collectors.counting()
+                ));
+
+        List<java.util.Map<String, Object>> timeline = new java.util.ArrayList<>();
+        // Asegurar 7 días incluyendo ceros
+        for (int i = 6; i >= 0; i--) {
+            java.time.LocalDate date = java.time.LocalDate.now().minusDays(i);
+            java.util.Map<String, Object> dayStat = new java.util.HashMap<>();
+            dayStat.put("date", date.toString());
+            dayStat.put("count", countsByDate.getOrDefault(date, 0L));
+            timeline.add(dayStat);
+        }
+        return timeline;
     }
 }

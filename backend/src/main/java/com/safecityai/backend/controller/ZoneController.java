@@ -4,7 +4,6 @@ import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.ZoneCreateDTO;
 import com.safecityai.backend.dto.ZoneResponseDTO;
 import com.safecityai.backend.model.enums.RiskLevel;
-import com.safecityai.backend.service.ReportService;
 import com.safecityai.backend.service.ZoneService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -19,11 +18,9 @@ import java.util.List;
 public class ZoneController {
 
     private final ZoneService zoneService;
-    private final ReportService reportService;
 
-    public ZoneController(ZoneService zoneService, ReportService reportService) {
+    public ZoneController(ZoneService zoneService) {
         this.zoneService = zoneService;
-        this.reportService = reportService;
     }
 
     // GET /api/v1/zones → todas las zonas

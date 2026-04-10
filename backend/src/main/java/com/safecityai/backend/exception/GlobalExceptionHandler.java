@@ -10,12 +10,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Manejador global de excepciones.
  * Captura las excepciones lanzadas en CUALQUIER controller
  * y devuelve una respuesta JSON estandarizada con ErrorResponse.
  */
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -79,6 +83,22 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 404 - ENDPOINT NO ENCONTRADO
+     * Previene que requests a URLs inexistentes se capturen como Error 500.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFoundException(NoResourceFoundException ex) {
+
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                "Endpoint no encontrado",
+                ex.getMessage()
+        );
+
+        return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
+    }
+
+    /**
      * 500 - INTERNAL SERVER ERROR
      * Captura CUALQUIER otra excepción no manejada.
      * Actúa como red de seguridad para que nunca se exponga
@@ -94,7 +114,7 @@ public class GlobalExceptionHandler {
         );
 
         // En un entorno real, aquí logearías el error:
-        // log.error("Error inesperado: ", ex);
+        log.error("Error inesperado: ", ex);
 
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
     }

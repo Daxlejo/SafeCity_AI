@@ -56,7 +56,7 @@ public class Report {
     private String photoUrl;
 
     // Zona a la que pertenece el reporte (para compatibilidad con tests frontend/postman)
-    @Column(name = "zone_id")
+    @Column(name = "zone_id", insertable = false, updatable = false)
     private Long zoneId;
 
     // Trust score calculado por la IA (0-100)

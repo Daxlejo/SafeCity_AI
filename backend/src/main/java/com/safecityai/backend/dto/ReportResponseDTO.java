@@ -51,9 +51,6 @@ public class ReportResponseDTO {
 
     private String photoUrl;
 
-    // Zona a la que pertenece
-    private Long zoneId;
-
     private Double trustScore;
 
     /**
