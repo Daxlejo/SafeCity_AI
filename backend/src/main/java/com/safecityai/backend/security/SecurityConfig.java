@@ -39,6 +39,11 @@ public class SecurityConfig {
                         .requestMatchers("/ws/**", "/ws-sockjs/**").permitAll()
                         // GET de reportes es público (el mapa lo necesita sin login)
                         .requestMatchers(HttpMethod.GET, "/api/v1/reports/**").permitAll()
+
+                        // GET de zonas y stats son publicos (para mapa y dashboard)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
+
                         // Todo lo demás requiere autenticación
                         .anyRequest().authenticated()
                 )
