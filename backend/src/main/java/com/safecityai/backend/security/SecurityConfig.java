@@ -3,6 +3,7 @@ package com.safecityai.backend.security;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -13,6 +14,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity  // Habilita @PreAuthorize en los controllers
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
@@ -39,11 +41,18 @@ public class SecurityConfig {
                         .requestMatchers("/ws/**", "/ws-sockjs/**").permitAll()
                         // GET de reportes es público (el mapa lo necesita sin login)
                         .requestMatchers(HttpMethod.GET, "/api/v1/reports/**").permitAll()
+                        // GET de zonas y stats es público (el Dashboard lo necesita sin login)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
+                        // Consola H2 para desarrollo
+                        .requestMatchers("/h2-console/**").permitAll()
                         // Todo lo demás requiere autenticación
                         .anyRequest().authenticated()
                 )
+                .headers(headers -> headers.frameOptions(frame -> frame.disable()))
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 }
+

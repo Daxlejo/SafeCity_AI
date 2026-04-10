@@ -4,7 +4,9 @@ import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.Zone;
 import com.safecityai.backend.repository.ReportRepository;
+import com.safecityai.backend.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -19,13 +21,28 @@ public class ReportService {
 
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
+    private final ZoneRepository zoneRepository;
+    private final ZoneService zoneService;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto) {
         log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
 
         Report report = convertToEntity(dto);
+
+        // Si viene zoneId, asignar la zona al reporte
+        if (dto.getZoneId() != null) {
+            Zone zone = zoneRepository.findById(dto.getZoneId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Zona", "id", dto.getZoneId()));
+            report.setZone(zone);
+        }
+
         Report savedReport = reportRepository.save(report);
+
+        // Si el reporte tiene zona, incrementar el contador de reportes de esa zona
+        if (savedReport.getZone() != null) {
+            zoneService.incrementReportCount(savedReport.getZone().getId());
+        }
         ReportResponseDTO response = convertToDTO(savedReport);
 
         // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
@@ -121,7 +138,7 @@ public class ReportService {
     }
 
     private ReportResponseDTO convertToDTO(Report report) {
-        return ReportResponseDTO.builder()
+        ReportResponseDTO.ReportResponseDTOBuilder builder = ReportResponseDTO.builder()
                 .id(report.getId())
                 .description(report.getDescription())
                 .incidentType(report.getIncidentType())
@@ -130,7 +147,14 @@ public class ReportService {
                 .source(report.getSource())
                 .latitude(report.getLatitude())
                 .longitude(report.getLongitude())
-                .reportDate(report.getReportDate())
-                .build();
+                .reportDate(report.getReportDate());
+
+        // Incluir datos de zona si existe
+        if (report.getZone() != null) {
+            builder.zoneId(report.getZone().getId())
+                   .zoneName(report.getZone().getName());
+        }
+
+        return builder.build();
     }
 }

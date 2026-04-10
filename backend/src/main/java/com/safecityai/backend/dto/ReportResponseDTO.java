@@ -86,4 +86,8 @@ public class ReportResponseDTO {
      */
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime reportDate;
+
+    // Zona asociada (puede ser null si el reporte no tiene zona)
+    private Long zoneId;
+    private String zoneName;
 }

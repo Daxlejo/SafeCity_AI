@@ -56,4 +56,10 @@ public class JwtService {
                 .parseSignedClaims(token)
                 .getPayload();
     }
+
+    // Extrae el rol del token (CITIZEN, ADMIN, MODERATOR)
+    public String extractRole(String token) {
+        Claims claims = extractClaims(token);
+        return claims.get("role", String.class);
+    }
 }

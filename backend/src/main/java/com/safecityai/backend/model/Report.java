@@ -55,4 +55,9 @@ public class Report {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
     private User reportedBy;
+
+    // Relación opcional: cada reporte puede pertenecer a una zona geográfica
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "zone_id")
+    private Zone zone;
 }
