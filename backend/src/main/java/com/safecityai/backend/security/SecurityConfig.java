@@ -44,6 +44,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
 
+                        // Fotos: GET es publico para que se vean en el frontend
+                        .requestMatchers(HttpMethod.GET, "/api/v1/uploads/**").permitAll()
+
                         // Todo lo demás requiere autenticación
                         .anyRequest().authenticated()
                 )
