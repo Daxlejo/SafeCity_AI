@@ -1,6 +1,7 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.HeatmapPointDTO;
+import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
 import com.safecityai.backend.dto.TypeCountDTO;
 import com.safecityai.backend.model.Report;
@@ -13,6 +14,9 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.stream.Collectors;
+
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 @Service
 public class StatsService {
@@ -52,11 +56,16 @@ public class StatsService {
                 ));
     }
 
-    // Conteo por zona
-    public java.util.Map<Long, Long> getReportsByZone() {
+    // Conteo por zona → devuelve nombres de zona, no IDs
+    public java.util.Map<String, Long> getReportsByZone() {
         return reportRepository.countByZoneId().stream()
                 .collect(Collectors.toMap(
-                        row -> (Long) row[0],
+                        row -> {
+                            Long zoneId = (Long) row[0];
+                            return zoneRepository.findById(zoneId)
+                                    .map(zone -> zone.getName())
+                                    .orElse("Zona " + zoneId);
+                        },
                         row -> (Long) row[1]
                 ));
     }
@@ -81,4 +90,27 @@ public class StatsService {
             case REJECTED -> 0.1;    // Rechazado = minima
         };
     }
+
+    // Timeline: ultimos N reportes ordenados por fecha descendente
+    public List<ReportResponseDTO> getTimeline(int limit) {
+        return reportRepository.findAll(
+                PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "reportDate")))
+                .stream()
+                .map(r -> ReportResponseDTO.builder()
+                        .id(r.getId())
+                        .description(r.getDescription())
+                        .incidentType(r.getIncidentType())
+                        .address(r.getAddress())
+                        .status(r.getStatus())
+                        .source(r.getSource())
+                        .latitude(r.getLatitude())
+                        .longitude(r.getLongitude())
+                        .photoUrl(r.getPhotoUrl())
+                        .trustScore(r.getTrustScore())
+                        .zoneId(r.getZoneId())
+                        .reportDate(r.getReportDate())
+                        .build())
+                .collect(Collectors.toList());
+    }
 }
+
