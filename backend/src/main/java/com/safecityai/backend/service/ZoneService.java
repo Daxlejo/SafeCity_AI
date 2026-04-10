@@ -1,10 +1,12 @@
 package com.safecityai.backend.service;
 
+import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.ZoneCreateDTO;
 import com.safecityai.backend.dto.ZoneResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Zone;
 import com.safecityai.backend.model.enums.RiskLevel;
+import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.ZoneRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,9 +19,11 @@ import java.util.stream.Collectors;
 public class ZoneService {
 
     private final ZoneRepository zoneRepository;
+    private final ReportRepository reportRepository;
 
-    public ZoneService(ZoneRepository zoneRepository) {
+    public ZoneService(ZoneRepository zoneRepository, ReportRepository reportRepository) {
         this.zoneRepository = zoneRepository;
+        this.reportRepository = reportRepository;
     }
 
     // Listar todas las zonas
@@ -41,6 +45,35 @@ public class ZoneService {
         return zoneRepository.findByRiskLevelIn(List.of(RiskLevel.HIGH, RiskLevel.CRITICAL))
                 .stream()
                 .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    // Timeline: reportes dentro del area de la zona, ordenados por fecha
+    public List<ReportResponseDTO> getZoneTimeline(Long zoneId) {
+        Zone zone = zoneRepository.findById(zoneId)
+                .orElseThrow(() -> new ResourceNotFoundException("Zona con id " + zoneId + " no encontrada"));
+
+        // Convertir radio (metros) a grados aproximados
+        double radiusInDegrees = zone.getRadius() / 111_320.0;
+        double minLat = zone.getCenterLat() - radiusInDegrees;
+        double maxLat = zone.getCenterLat() + radiusInDegrees;
+        double minLng = zone.getCenterLng() - radiusInDegrees;
+        double maxLng = zone.getCenterLng() + radiusInDegrees;
+
+        return reportRepository.findByArea(minLat, maxLat, minLng, maxLng).stream()
+                .map(r -> ReportResponseDTO.builder()
+                        .id(r.getId())
+                        .description(r.getDescription())
+                        .incidentType(r.getIncidentType())
+                        .address(r.getAddress())
+                        .status(r.getStatus())
+                        .source(r.getSource())
+                        .latitude(r.getLatitude())
+                        .longitude(r.getLongitude())
+                        .photoUrl(r.getPhotoUrl())
+                        .trustScore(r.getTrustScore())
+                        .reportDate(r.getReportDate())
+                        .build())
                 .collect(Collectors.toList());
     }
 

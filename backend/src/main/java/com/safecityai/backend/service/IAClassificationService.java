@@ -22,7 +22,7 @@ public class IAClassificationService {
         this.reportRepository = reportRepository;
     }
 
-    // Analiza un reporte y devuelve la clasificacion
+    // Analiza un reporte, calcula trust score y lo guarda en la BD
     public IAClassificationDTO classifyReport(Long reportId) {
         Report report = reportRepository.findById(reportId)
                 .orElseThrow(() -> new RuntimeException("Reporte no encontrado"));
@@ -30,6 +30,10 @@ public class IAClassificationService {
         double score = calculateTrustScore(report);
         TrustLevel level = scoreTolevel(score);
         IncidentType suggestedType = detectIncidentType(report.getDescription());
+
+        // Guardar el trust score en el reporte
+        report.setTrustScore(score);
+        reportRepository.save(report);
 
         return IAClassificationDTO.builder()
                 .reportId(reportId)
@@ -78,6 +82,11 @@ public class IAClassificationService {
             }
         }
 
+        // Tiene foto? (+25 puntos - evidencia visual)
+        if (report.getPhotoUrl() != null && !report.getPhotoUrl().isBlank()) {
+            score += 25;
+        }
+
         return Math.min(score, 100.0);
     }
 
@@ -120,6 +129,9 @@ public class IAClassificationService {
         }
         if (report.getDescription() != null && report.getDescription().length() > 50) {
             reason.append("Descripcion detallada. ");
+        }
+        if (report.getPhotoUrl() != null && !report.getPhotoUrl().isBlank()) {
+            reason.append("Foto adjunta (+25 confianza). ");
         }
         if (!suggested.equals(report.getIncidentType())) {
             reason.append("Tipo sugerido difiere del original (").append(suggested).append("). ");
