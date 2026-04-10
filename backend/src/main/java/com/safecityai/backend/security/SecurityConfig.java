@@ -42,8 +42,10 @@ public class SecurityConfig {
                         // GET de reportes es público (el mapa lo necesita sin login)
                         .requestMatchers(HttpMethod.GET, "/api/v1/reports/**").permitAll()
 
-                        // GET de zonas y stats son publicos (para mapa y dashboard)
+                        // Zonas: GET publico, POST/PUT/DELETE solo para ADMIN
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
+                        .requestMatchers("/api/v1/zones/**").hasRole("ADMIN")
+                        // Stats: GET publico (para mapa y dashboard)
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
 
                         // OSINT: publico para permitir busquedas y triggers automaticos
