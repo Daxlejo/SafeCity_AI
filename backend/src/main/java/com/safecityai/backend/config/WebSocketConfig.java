@@ -35,11 +35,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
         // WebSocket nativo — para StompJs Client del frontend
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*");
+                .setAllowedOriginPatterns(origins);
 
         // SockJS fallback — para navegadores que no soporten WebSocket
         registry.addEndpoint("/ws-sockjs")
-                .setAllowedOriginPatterns("*")
+                .setAllowedOriginPatterns(origins)
                 .withSockJS();
     }
 }
