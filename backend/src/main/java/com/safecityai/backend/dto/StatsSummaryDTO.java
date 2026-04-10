@@ -22,7 +22,7 @@ public class StatsSummaryDTO {
     private Long totalZones;
 
     // Conteo por tipo de incidente (para la grafica de barras)
-    private List<TypeCountDTO> reportsByType;
+    private java.util.Map<String, Long> reportsByType;
 
     // Datos para el heatmap: lista de puntos [lat, lng, intensidad]
     private List<HeatmapPointDTO> heatmapData;

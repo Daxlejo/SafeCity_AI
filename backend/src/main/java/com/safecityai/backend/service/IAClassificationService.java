@@ -101,12 +101,13 @@ public class IAClassificationService {
         prompt.append("}\n\n");
 
         prompt.append("REGLAS de puntuación:\n");
+        prompt.append("- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
         prompt.append("- Descripcion detallada y coherente: +20 a +30 puntos\n");
         prompt.append("- Tiene coordenadas GPS: +15 puntos\n");
         prompt.append("- Tiene foto adjunta: +20 puntos\n");
         prompt.append("- Fuente confiable (ciudadano directo): +10 puntos\n");
-        prompt.append("- Descripcion vaga, sospechosa o incoherente: -10 a -30 puntos\n");
-        prompt.append("- Base de partida: 30 puntos\n");
+        prompt.append("- Descripcion vaga o poco clara: -10 a -30 puntos\n");
+        prompt.append("- Base de partida para incidentes reales: 30 puntos\n");
 
         return prompt.toString();
     }

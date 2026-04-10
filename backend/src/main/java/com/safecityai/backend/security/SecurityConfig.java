@@ -44,6 +44,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
 
+                        // OSINT: publico para permitir busquedas y triggers automaticos
+                        .requestMatchers("/api/v1/osint/**").permitAll()
+
                         // Fotos: GET es publico para que se vean en el frontend
                         .requestMatchers(HttpMethod.GET, "/api/v1/uploads/**").permitAll()
 
