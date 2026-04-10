@@ -4,6 +4,7 @@ import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -78,6 +79,15 @@ public class ReportService {
         notificationService.notifyReportDeleted(id);
 
         log.info("Reporte ID: {} eliminado exitosamente", id);
+    }
+
+    // Actualizar status de un reporte (para moderacion admin)
+    @Transactional
+    public void updateStatus(Long id, ReportStatus newStatus) {
+        Report report = findReportOrThrow(id);
+        report.setStatus(newStatus);
+        reportRepository.save(report);
+        log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
     }
 
     // ═══════════════ HELPERS ═══════════════
