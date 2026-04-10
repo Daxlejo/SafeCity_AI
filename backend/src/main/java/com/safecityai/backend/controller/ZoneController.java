@@ -9,6 +9,7 @@ import com.safecityai.backend.service.ZoneService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -49,21 +50,24 @@ public class ZoneController {
         return ResponseEntity.ok(zoneService.getZoneTimeline(id));
     }
 
-    // POST /api/v1/zones → crear zona (requiere token)
+    // POST /api/v1/zones → crear zona (requiere token ADMIN)
     @PostMapping
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ZoneResponseDTO> create(@Valid @RequestBody ZoneCreateDTO dto) {
         return new ResponseEntity<>(zoneService.create(dto), HttpStatus.CREATED);
     }
 
-    // PUT /api/v1/zones/{id}/risk → actualizar nivel de riesgo
+    // PUT /api/v1/zones/{id}/risk → actualizar nivel de riesgo (solo ADMIN)
     @PutMapping("/{id}/risk")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ZoneResponseDTO> updateRisk(@PathVariable Long id,
                                                        @RequestParam RiskLevel level) {
         return ResponseEntity.ok(zoneService.updateRiskLevel(id, level));
     }
 
-    // DELETE /api/v1/zones/{id} → eliminar zona
+    // DELETE /api/v1/zones/{id} → eliminar zona (solo ADMIN)
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         zoneService.delete(id);
         return ResponseEntity.noContent().build();
