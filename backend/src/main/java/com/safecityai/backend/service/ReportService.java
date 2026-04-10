@@ -117,6 +117,8 @@ public class ReportService {
             report.setLatitude(dto.getLatitude());
         if (dto.getLongitude() != null)
             report.setLongitude(dto.getLongitude());
+        if (dto.getPhotoUrl() != null)
+            report.setPhotoUrl(dto.getPhotoUrl());
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {
@@ -127,6 +129,7 @@ public class ReportService {
                 .source(dto.getSource())
                 .latitude(dto.getLatitude())
                 .longitude(dto.getLongitude())
+                .photoUrl(dto.getPhotoUrl())
                 .build();
     }
 
@@ -140,6 +143,8 @@ public class ReportService {
                 .source(report.getSource())
                 .latitude(report.getLatitude())
                 .longitude(report.getLongitude())
+                .photoUrl(report.getPhotoUrl())
+                .trustScore(report.getTrustScore())
                 .reportDate(report.getReportDate())
                 .build();
     }

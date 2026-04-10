@@ -70,6 +70,10 @@ public class ReportResponseDTO {
 
     private Double longitude;
 
+    private String photoUrl;
+
+    private Double trustScore;
+
     /**
      * Fecha de creación del reporte.
      * Corresponde al campo reportDate de la entidad, que usa @CreationTimestamp.

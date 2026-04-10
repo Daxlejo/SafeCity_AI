@@ -21,4 +21,9 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     // Reportes con coordenadas → para heatmap
     @Query("SELECT r FROM Report r WHERE r.latitude IS NOT NULL AND r.longitude IS NOT NULL")
     List<Report> findAllWithCoordinates();
+
+    // Timeline: reportes cercanos a una zona (por area) ordenados por fecha
+    @Query("SELECT r FROM Report r WHERE r.latitude BETWEEN :minLat AND :maxLat " +
+           "AND r.longitude BETWEEN :minLng AND :maxLng ORDER BY r.reportDate DESC")
+    List<Report> findByArea(double minLat, double maxLat, double minLng, double maxLng);
 }

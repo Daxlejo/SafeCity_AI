@@ -1,8 +1,10 @@
 package com.safecityai.backend.controller;
 
+import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.ZoneCreateDTO;
 import com.safecityai.backend.dto.ZoneResponseDTO;
 import com.safecityai.backend.model.enums.RiskLevel;
+import com.safecityai.backend.service.ReportService;
 import com.safecityai.backend.service.ZoneService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -16,9 +18,11 @@ import java.util.List;
 public class ZoneController {
 
     private final ZoneService zoneService;
+    private final ReportService reportService;
 
-    public ZoneController(ZoneService zoneService) {
+    public ZoneController(ZoneService zoneService, ReportService reportService) {
         this.zoneService = zoneService;
+        this.reportService = reportService;
     }
 
     // GET /api/v1/zones → todas las zonas
@@ -37,6 +41,12 @@ public class ZoneController {
     @GetMapping("/risky")
     public ResponseEntity<List<ZoneResponseDTO>> getRisky() {
         return ResponseEntity.ok(zoneService.findRisky());
+    }
+
+    // GET /api/v1/zones/{id}/timeline → linea de tiempo de incidentes en la zona
+    @GetMapping("/{id}/timeline")
+    public ResponseEntity<List<ReportResponseDTO>> getTimeline(@PathVariable Long id) {
+        return ResponseEntity.ok(zoneService.getZoneTimeline(id));
     }
 
     // POST /api/v1/zones → crear zona (requiere token)

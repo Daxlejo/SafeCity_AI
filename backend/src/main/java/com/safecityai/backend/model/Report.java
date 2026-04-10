@@ -51,7 +51,15 @@ public class Report {
 
     private Double longitude;
 
-    // Relación: cada reporte pertenece a un usuario
+    // URL de la foto del incidente (sube el trust score)
+    @Column(name = "photo_url", length = 500)
+    private String photoUrl;
+
+    // Trust score calculado por la IA (0-100)
+    @Column(name = "trust_score")
+    private Double trustScore;
+
+    // Relacion: cada reporte pertenece a un usuario
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
     private User reportedBy;
