@@ -15,6 +15,10 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     @Query("SELECT r.incidentType, COUNT(r) FROM Report r GROUP BY r.incidentType")
     List<Object[]> countByIncidentType();
 
+    // Conteo por zona → para estadísticas por zona
+    @Query("SELECT r.zoneId, COUNT(r) FROM Report r WHERE r.zoneId IS NOT NULL GROUP BY r.zoneId")
+    List<Object[]> countByZoneId();
+
     // Conteo por status
     long countByStatus(ReportStatus status);
 

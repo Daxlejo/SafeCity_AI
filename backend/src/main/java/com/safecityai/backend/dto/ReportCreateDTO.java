@@ -11,21 +11,13 @@ import lombok.NoArgsConstructor;
  * DTO para CREAR un nuevo reporte.
  * Solo contiene los campos que el CIUDADANO debe enviar.
  * Campos como id, status y reportDate los genera el sistema automáticamente.
- *
- * ¿Por qué un DTO y no usar la entidad Report directamente?
- * 1. Seguridad: el cliente NO debe poder setear id, status ni reportDate
- * 2. Validación: aquí ponemos las reglas de lo que ENTRA
- * 3. Desacoplamiento: si la entidad cambia, la API no se rompe
- *
- * Las anotaciones de validación se activan cuando el controller usa @Valid.
  */
-@Data // Lombok: genera getters, setters, toString, equals, hashCode
-@NoArgsConstructor // Constructor vacío (necesario para deserialización JSON)
-@AllArgsConstructor // Constructor con todos los campos
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class ReportCreateDTO {
 
     // ──────────── CAMPOS OBLIGATORIOS ────────────
-
     /**
      * Descripción detallada de lo que ocurrió.
      *
@@ -44,36 +36,16 @@ public class ReportCreateDTO {
      * Tipo de incidente (ROBBERY, ASSAULT, THEFT, etc.)
      *
      * @NotNull = no puede ser null.
-     *          → Usamos @NotNull y NO @NotBlank porque @NotBlank solo funciona con
-     *          Strings.
-     *          Los enums son objetos, no Strings, así que @NotBlank daría error.
-     *
-     *          Jackson automáticamente convierte el String del JSON ("ROBBERY")
-     *          al valor del enum (IncidentType.ROBBERY). Si el cliente manda un
-     *          valor
-     *          que no existe en el enum, Spring devuelve 400 automáticamente.
      */
     @NotNull(message = "El tipo de incidente es obligatorio")
     private IncidentType incidentType;
 
-    /**
-     * Dirección legible del incidente.
-     *
-     * Es obligatoria porque en la entidad Report tiene @Column(nullable = false).
-     * Si tu DTO lo acepta como opcional pero la BD lo requiere, obtendrías
-     * un error de BD en vez de un error de validación limpio (400 vs 500).
-     *
-     * Regla: las validaciones del DTO deben ser >= estrictas que las de la BD.
-     */
     @NotBlank(message = "La dirección es obligatoria")
     @Size(max = 255, message = "La dirección no puede exceder 255 caracteres")
     private String address;
 
     /**
      * Medio por el cual se genera el reporte (CITIZEN_TEXT, CITIZEN_VOICE, etc.)
-     *
-     * También es un enum → usamos @NotNull (no @NotBlank).
-     * En la entidad tiene @Column(nullable = false), así que es obligatorio.
      */
     @NotNull(message = "La fuente del reporte es obligatoria")
     private ReportSource source;
@@ -106,4 +78,7 @@ public class ReportCreateDTO {
 
     // URL de la foto del incidente (opcional, sube el trust score)
     private String photoUrl;
+
+    // Zona del incidente
+    private Long zoneId;
 }
