@@ -38,4 +38,10 @@ public class StatsController {
     public ResponseEntity<List<HeatmapPointDTO>> getHeatmap() {
         return ResponseEntity.ok(statsService.getHeatmapData());
     }
+
+    // GET /api/v1/stats/by-zone → conteo por zona
+    @GetMapping("/by-zone")
+    public ResponseEntity<java.util.Map<Long, Long>> getByZone() {
+        return ResponseEntity.ok(statsService.getReportsByZone());
+    }
 }

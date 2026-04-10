@@ -15,11 +15,10 @@ import java.time.LocalDateTime;
  * DTO para DEVOLVER un reporte al frontend.
  *
  * Diferencias clave con ReportCreateDTO:
- * 1. INCLUYE id → el frontend lo necesita para GET /reports/{id}, PUT, DELETE
- * 2. INCLUYE status → el ciudadano ve si su reporte está PENDING, VERIFIED,
- * etc.
- * 3. INCLUYE reportDate → para mostrar cuándo se creó el reporte
- * 4. NO tiene anotaciones de validación → no validamos lo que SALE, solo lo que
+ * 1. INCLUYE id
+ * 2. INCLUYE status
+ * 3. INCLUYE reportDate
+ * 4. NO tiene anotaciones de validación - no validamos lo que SALE, solo lo que
  * ENTRA
  *
  * ¿Por qué no devolver la entidad Report directamente?
@@ -30,40 +29,20 @@ import java.time.LocalDateTime;
  * mantiene
  */
 @Data
-@Builder // Permite construir objetos así: ReportResponseDTO.builder().id(1L).build()
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class ReportResponseDTO {
 
-    /**
-     * ID único del reporte, generado por la BD.
-     * El frontend lo necesita para operaciones específicas:
-     * GET /reports/{id}, PUT /reports/{id}, DELETE /reports/{id}
-     */
     private Long id;
 
     private String description;
 
-    /**
-     * Tipo de incidente. El frontend puede usar esto para:
-     * - Mostrar iconos distintos en el mapa según el tipo
-     * - Filtrar reportes por categoría
-     */
     private IncidentType incidentType;
 
     private String address;
 
-    /**
-     * Estado actual del reporte (PENDING, VERIFIED, REJECTED, RESOLVED).
-     * NO estaba en el CreateDTO porque el sistema lo asigna automáticamente
-     * (PENDING).
-     * Aquí SÍ se devuelve para que el ciudadano vea el progreso de su reporte.
-     */
     private ReportStatus status;
-
-    /**
-     * Fuente del reporte. Útil para estadísticas y filtros.
-     */
     private ReportSource source;
 
     private Double latitude;
@@ -71,6 +50,9 @@ public class ReportResponseDTO {
     private Double longitude;
 
     private String photoUrl;
+
+    // Zona a la que pertenece
+    private Long zoneId;
 
     private Double trustScore;
 
@@ -82,8 +64,6 @@ public class ReportResponseDTO {
      *             - SIN esta anotación: LocalDateTime se serializa como array
      *             [2026,3,15,11,24,16]
      *             - CON esta anotación: se serializa como "2026-03-15 11:24:16"
-     *             (legible para humanos)
-     *
      *             El pattern "yyyy-MM-dd HH:mm:ss" define el formato exacto:
      *             yyyy = año 4 dígitos, MM = mes, dd = día, HH = hora 24h, mm =
      *             minutos, ss = segundos

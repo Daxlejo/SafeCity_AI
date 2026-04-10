@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +64,14 @@ public class OsintService {
                 // Paso 2 y 3: Por cada resultado, crear reporte y clasificar
                 for (OsintResultDTO osint : osintResults) {
                         try {
+                                // Filtro: No procesar incidentes viejos (mas de 7 dias)
+                                if (osint.getPublishedAt() != null &&
+                                                osint.getPublishedAt().isBefore(LocalDateTime.now().minusDays(7))) {
+                                        log.info("Ignorando reporte viejo de OSINT (fecha: {})",
+                                                        osint.getPublishedAt());
+                                        continue;
+                                }
+
                                 // Crear el reporte en la BD
                                 Report report = Report.builder()
                                                 .description(osint.getContent())
@@ -184,6 +194,21 @@ public class OsintService {
 
                                                 String content = !description.isBlank() ? description : name;
 
+                                                LocalDateTime pubDate = LocalDateTime.now();
+                                                try {
+                                                        if (item.has("created_time")) {
+                                                                pubDate = ZonedDateTime.parse(
+                                                                                item.get("created_time").asText(),
+                                                                                DateTimeFormatter.ISO_DATE_TIME)
+                                                                                .toLocalDateTime();
+                                                        } else if (item.has("time")) {
+                                                                pubDate = ZonedDateTime.parse(item.get("time").asText(),
+                                                                                DateTimeFormatter.ISO_DATE_TIME)
+                                                                                .toLocalDateTime();
+                                                        }
+                                                } catch (Exception e) {
+                                                }
+
                                                 if (!content.isBlank()) {
                                                         results.add(OsintResultDTO.builder()
                                                                         .title("[FB Prioritaria] " + name)
@@ -191,7 +216,7 @@ public class OsintService {
                                                                         .sourceUrl(pageUrl)
                                                                         .sourceType(ReportSource.SOCIAL_MEDIA)
                                                                         .detectedLocation("Pasto")
-                                                                        .publishedAt(LocalDateTime.now())
+                                                                        .publishedAt(pubDate)
                                                                         .confidence(0.80)
                                                                         .build());
                                                 }
@@ -214,7 +239,8 @@ public class OsintService {
         private List<OsintResultDTO> searchGoogleNews(String city) {
                 List<OsintResultDTO> results = new ArrayList<>();
 
-                String query = "seguridad+" + city.replace(" ", "+") + "+Nariño";
+                // Buscamos incidentes reales, no noticias politicas de "seguridad"
+                String query = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio)+" + city.replace(" ", "+");
                 String url = String.format(
                                 "https://news.google.com/rss/search?q=%s&hl=es-419&gl=CO&ceid=CO:es-419",
                                 query);
@@ -234,15 +260,25 @@ public class OsintService {
 
                         String title = extractXmlTag(item, "title");
                         String link = extractXmlTag(item, "link");
+                        String pubDateStr = extractXmlTag(item, "pubDate");
+
+                        LocalDateTime pubDate = LocalDateTime.now();
+                        try {
+                                if (!pubDateStr.isBlank()) {
+                                        pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
+                                                        .toLocalDateTime();
+                                }
+                        } catch (Exception e) {
+                        }
 
                         if (isSecurityRelated(title)) {
                                 results.add(OsintResultDTO.builder()
                                                 .title(title)
-                                                .content("Noticia de Google News sobre seguridad en " + city)
+                                                .content(title)
                                                 .sourceUrl(link)
                                                 .sourceType(ReportSource.INSTITUTIONAL)
                                                 .detectedLocation(city)
-                                                .publishedAt(LocalDateTime.now())
+                                                .publishedAt(pubDate)
                                                 .confidence(0.70)
                                                 .build());
                                 count++;
@@ -259,9 +295,11 @@ public class OsintService {
         private List<OsintResultDTO> searchFacebook(String city) {
                 List<OsintResultDTO> results = new ArrayList<>();
 
+                // Busqueda mucho más especifica, no solo "seguridad"
+                String query = city.replace(" ", "+") + "+(robo|atraco|accidente|hurto|choque|homicidio)";
                 String url = String.format(
-                                "https://%s/search/posts?query=%s+seguridad&count=10",
-                                facebookHost, city.replace(" ", "+"));
+                                "https://%s/search/posts?query=%s&count=10",
+                                facebookHost, query);
 
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("x-rapidapi-key", rapidApiKey);
@@ -291,6 +329,22 @@ public class OsintService {
                                         String postUrl = item.has("url") ? item.get("url").asText()
                                                         : item.has("link") ? item.get("link").asText() : "";
 
+                                        LocalDateTime pubDate = LocalDateTime.now();
+                                        try {
+                                                if (item.has("created_time")) {
+                                                        pubDate = ZonedDateTime
+                                                                        .parse(item.get("created_time").asText(),
+                                                                                        DateTimeFormatter.ISO_DATE_TIME)
+                                                                        .toLocalDateTime();
+                                                } else if (item.has("time")) {
+                                                        pubDate = ZonedDateTime
+                                                                        .parse(item.get("time").asText(),
+                                                                                        DateTimeFormatter.ISO_DATE_TIME)
+                                                                        .toLocalDateTime();
+                                                }
+                                        } catch (Exception e) {
+                                        }
+
                                         if (!text.isBlank()) {
                                                 results.add(OsintResultDTO.builder()
                                                                 .title(text.length() > 100
@@ -300,7 +354,7 @@ public class OsintService {
                                                                 .sourceUrl(postUrl)
                                                                 .sourceType(ReportSource.SOCIAL_MEDIA)
                                                                 .detectedLocation(city)
-                                                                .publishedAt(LocalDateTime.now())
+                                                                .publishedAt(pubDate)
                                                                 .confidence(0.50)
                                                                 .build());
                                         }

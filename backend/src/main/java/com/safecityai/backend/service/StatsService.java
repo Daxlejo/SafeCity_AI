@@ -44,13 +44,21 @@ public class StatsService {
     }
 
     // Conteo por tipo → grafica de barras
-    public List<TypeCountDTO> getReportsByType() {
+    public java.util.Map<String, Long> getReportsByType() {
         return reportRepository.countByIncidentType().stream()
-                .map(row -> TypeCountDTO.builder()
-                        .type((IncidentType) row[0])
-                        .count((Long) row[1])
-                        .build())
-                .collect(Collectors.toList());
+                .collect(Collectors.toMap(
+                        row -> ((IncidentType) row[0]).name(),
+                        row -> (Long) row[1]
+                ));
+    }
+
+    // Conteo por zona
+    public java.util.Map<Long, Long> getReportsByZone() {
+        return reportRepository.countByZoneId().stream()
+                .collect(Collectors.toMap(
+                        row -> (Long) row[0],
+                        row -> (Long) row[1]
+                ));
     }
 
     // Datos para el heatmap del frontend

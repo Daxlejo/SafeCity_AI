@@ -130,6 +130,8 @@ public class ReportService {
                 .latitude(dto.getLatitude())
                 .longitude(dto.getLongitude())
                 .photoUrl(dto.getPhotoUrl())
+                .zoneId(dto.getZoneId())
+                .status(ReportStatus.PENDING)
                 .build();
     }
 
@@ -145,6 +147,7 @@ public class ReportService {
                 .longitude(report.getLongitude())
                 .photoUrl(report.getPhotoUrl())
                 .trustScore(report.getTrustScore())
+                .zoneId(report.getZoneId())
                 .reportDate(report.getReportDate())
                 .build();
     }
