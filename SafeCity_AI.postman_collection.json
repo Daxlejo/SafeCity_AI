@@ -1,0 +1,1181 @@
+{
+	"info": {
+		"_postman_id": "safecity-ai-collection",
+		"name": "SafeCity AI",
+		"description": "Colección completa de la API SafeCity AI — Sprint 6.\n\nIncluye endpoints de Auth, Users, Reports, Alerts y Notifications.\n\n**Novedades Sprint 6:**\n- Pre-request script a nivel de colección que hace login automático\n- Carpeta Notifications con documentación de topics WebSocket/STOMP\n- Carpeta Security Tests que valida 401 sin token\n- Reports actualizado con header Authorization\n\n**Flujo de ejecución (Collection Runner):**\n1. Register → crea usuario con datos únicos (timestamp)\n2. Login (email/cédula) → valida login y guarda token\n3-5. CRUD de Users\n6-10. CRUD de Reports (con Authorization)\n11-14. CRUD de Alerts/Preferences\n15-16. Notifications (documentación WebSocket + prueba health)\n17-19. Security Tests (401 sin token)\n\n**Variables dinámicas:**\n- `base_url`: URL del backend\n- `token`: JWT (se autocaptura)\n- `userId`, `userEmail`, `userCedula`: datos del usuario\n- `reportId`: ID del reporte creado\n- `preferenceId`: ID de la preferencia creada",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// ═══════════════════════════════════════════════════════",
+					"// PRE-REQUEST SCRIPT A NIVEL DE COLECCIÓN",
+					"// Se ejecuta ANTES de cada request de la colección.",
+					"// Si no hay token guardado, hace login automáticamente.",
+					"// ═══════════════════════════════════════════════════════",
+					"",
+					"var currentRequest = pm.info.requestName;",
+					"",
+					"// Skip para requests de Auth (Register/Login) y Security Tests (sin token)",
+					"var skipRequests = ['Register', 'Login (con email)', 'Login (con cédula)',",
+					"    'Create Report sin token (401)', 'Create Preference sin token (401)',",
+					"    'Update User sin token (401)'];",
+					"",
+					"if (skipRequests.indexOf(currentRequest) !== -1) {",
+					"    console.log('⏭️ Skip auto-login para: ' + currentRequest);",
+					"    return;",
+					"}",
+					"",
+					"// Si ya tenemos token, no hacer nada",
+					"var token = pm.collectionVariables.get('token');",
+					"if (token && token.length > 0) {",
+					"    console.log('🔑 Token existente detectado, continuando...');",
+					"    return;",
+					"}",
+					"",
+					"// Si no hay token, hacer login automático",
+					"console.log('🔐 No hay token. Ejecutando auto-login...');",
+					"",
+					"var loginEmail = pm.collectionVariables.get('userEmail');",
+					"var loginPassword = 'segura123';",
+					"",
+					"// Si no hay email guardado, registrar un usuario nuevo",
+					"if (!loginEmail || loginEmail.length === 0) {",
+					"    console.log('📝 No hay email guardado. Registrando usuario nuevo...');",
+					"    var timestamp = new Date().getTime();",
+					"    loginEmail = 'autouser' + timestamp + '@safecity.com';",
+					"    var cedula = String(timestamp).slice(-8);",
+					"",
+					"    pm.sendRequest({",
+					"        url: pm.collectionVariables.get('base_url') + '/api/v1/auth/register',",
+					"        method: 'POST',",
+					"        header: { 'Content-Type': 'application/json' },",
+					"        body: {",
+					"            mode: 'raw',",
+					"            raw: JSON.stringify({",
+					"                name: 'Auto User',",
+					"                email: loginEmail,",
+					"                cedula: cedula,",
+					"                password: loginPassword",
+					"            })",
+					"        }",
+					"    }, function (err, res) {",
+					"        if (!err && res.code === 201) {",
+					"            var data = res.json();",
+					"            pm.collectionVariables.set('token', data.token);",
+					"            pm.collectionVariables.set('userEmail', loginEmail);",
+					"            pm.collectionVariables.set('userCedula', cedula);",
+					"            pm.collectionVariables.set('userId', data.user.id);",
+					"            console.log('✅ Auto-register exitoso. Token guardado.');",
+					"        } else {",
+					"            console.log('⚠️ Auto-register falló. Intentando login...');",
+					"        }",
+					"    });",
+					"    return;",
+					"}",
+					"",
+					"// Login con email existente",
+					"pm.sendRequest({",
+					"    url: pm.collectionVariables.get('base_url') + '/api/v1/auth/login',",
+					"    method: 'POST',",
+					"    header: { 'Content-Type': 'application/json' },",
+					"    body: {",
+					"        mode: 'raw',",
+					"        raw: JSON.stringify({",
+					"            identifier: loginEmail,",
+					"            password: loginPassword",
+					"        })",
+					"    }",
+					"}, function (err, res) {",
+					"    if (!err && res.code === 200) {",
+					"        var data = res.json();",
+					"        pm.collectionVariables.set('token', data.token);",
+					"        console.log('✅ Auto-login exitoso. Token guardado.');",
+					"    } else {",
+					"        console.log('❌ Auto-login falló: ' + (err || res.status));",
+					"    }",
+					"});"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userEmail",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userCedula",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "reportId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "preferenceId",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Auth",
+			"description": "Endpoints de autenticación: registro e inicio de sesión.\n\nAl hacer Register o Login exitoso, el token JWT se guarda automáticamente en la variable `{{token}}` para usarse en los demás requests.",
+			"item": [
+				{
+					"name": "Register",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"var timestamp = new Date().getTime();",
+									"var email = 'testuser' + timestamp + '@safecity.com';",
+									"var cedula = String(timestamp).slice(-8);",
+									"",
+									"pm.collectionVariables.set('userEmail', email);",
+									"pm.collectionVariables.set('userCedula', cedula);",
+									"// Limpiar token para forzar flujo limpio",
+									"pm.collectionVariables.set('token', '');",
+									"",
+									"console.log('📧 Email generado: ' + email);",
+									"console.log('🆔 Cédula generada: ' + cedula);"
+								]
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 201 Created', function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene token JWT', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.token).to.not.be.undefined;",
+									"    pm.expect(jsonData.token).to.be.a('string');",
+									"    pm.expect(jsonData.token.length).to.be.greaterThan(0);",
+									"    pm.collectionVariables.set('token', jsonData.token);",
+									"    console.log('✅ Token guardado');",
+									"});",
+									"",
+									"pm.test('Respuesta contiene datos del usuario', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.user).to.not.be.undefined;",
+									"    pm.expect(jsonData.user.id).to.not.be.undefined;",
+									"    pm.expect(jsonData.user.name).to.be.a('string');",
+									"    pm.expect(jsonData.user.email).to.be.a('string');",
+									"    pm.expect(jsonData.user.role).to.eql('CITIZEN');",
+									"    pm.collectionVariables.set('userId', jsonData.user.id);",
+									"    console.log('✅ userId guardado: ' + jsonData.user.id);",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.response.to.have.header('Content-Type');",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Test User SafeCity\",\n    \"email\": \"{{userEmail}}\",\n    \"cedula\": \"{{userCedula}}\",\n    \"password\": \"segura123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/auth/register",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "auth", "register"]
+						},
+						"description": "Registra un nuevo usuario con datos únicos generados por timestamp.\n\nEl pre-request script genera automáticamente un email y cédula únicos para evitar conflictos con registros previos."
+					},
+					"response": []
+				},
+				{
+					"name": "Login (con email)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene token JWT', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.token).to.not.be.undefined;",
+									"    pm.expect(jsonData.token).to.be.a('string');",
+									"    pm.collectionVariables.set('token', jsonData.token);",
+									"    console.log('✅ Token actualizado via login email');",
+									"});",
+									"",
+									"pm.test('Respuesta contiene datos del usuario', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.user).to.not.be.undefined;",
+									"    pm.expect(jsonData.user.email).to.eql(pm.collectionVariables.get('userEmail'));",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.response.to.have.header('Content-Type');",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"identifier\": \"{{userEmail}}\",\n    \"password\": \"segura123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "auth", "login"]
+						},
+						"description": "Inicia sesión con el email del usuario registrado previamente."
+					},
+					"response": []
+				},
+				{
+					"name": "Login (con cédula)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene token JWT', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.token).to.not.be.undefined;",
+									"    pm.expect(jsonData.token).to.be.a('string');",
+									"    pm.collectionVariables.set('token', jsonData.token);",
+									"    console.log('✅ Token actualizado via login cédula');",
+									"});",
+									"",
+									"pm.test('Respuesta contiene datos del usuario', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.user).to.not.be.undefined;",
+									"    pm.expect(jsonData.user.cedula).to.eql(pm.collectionVariables.get('userCedula'));",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.response.to.have.header('Content-Type');",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"identifier\": \"{{userCedula}}\",\n    \"password\": \"segura123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "auth", "login"]
+						},
+						"description": "Inicia sesión con la cédula del usuario registrado previamente."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Users",
+			"description": "Endpoints de gestión de usuarios.\n\n⚠️ Todos requieren autenticación JWT (Bearer token).\nEl header Authorization se incluye en cada request.",
+			"item": [
+				{
+					"name": "Get All Users (paginated)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta es paginada con content', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.content).to.be.an('array');",
+									"    pm.expect(jsonData.totalElements).to.be.a('number');",
+									"    pm.expect(jsonData.totalPages).to.be.a('number');",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/users?page=0&size=20",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "users"],
+							"query": [
+								{ "key": "page", "value": "0" },
+								{ "key": "size", "value": "20" }
+							]
+						},
+						"description": "Lista todos los usuarios paginados."
+					},
+					"response": []
+				},
+				{
+					"name": "Get User by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene datos del usuario', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.eql(Number(pm.collectionVariables.get('userId')));",
+									"    pm.expect(jsonData.name).to.be.a('string');",
+									"    pm.expect(jsonData.email).to.be.a('string');",
+									"    pm.expect(jsonData.cedula).to.be.a('string');",
+									"    pm.expect(jsonData.role).to.be.a('string');",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/users/{{userId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "users", "{{userId}}"]
+						},
+						"description": "Obtiene el usuario registrado por su ID dinámico."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Profile",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Nombre fue actualizado', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.name).to.eql('Test User Actualizado');",
+									"    pm.expect(jsonData.id).to.eql(Number(pm.collectionVariables.get('userId')));",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Test User Actualizado\",\n    \"email\": \"{{userEmail}}\",\n    \"cedula\": \"{{userCedula}}\",\n    \"password\": \"segura123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/users/{{userId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "users", "{{userId}}"]
+						},
+						"description": "Actualiza el perfil del usuario registrado."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Reports",
+			"description": "Endpoints de gestión de reportes de incidentes.\n\n⚠️ POST, PUT y DELETE requieren autenticación JWT.\nGET de reportes es público (el mapa lo necesita sin login).\n\nEl header Authorization: Bearer {{token}} está incluido en todos los requests.\nEl ID del reporte se captura automáticamente al crear uno nuevo.",
+			"item": [
+				{
+					"name": "Create Report",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 201 Created', function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene reporte creado', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.not.be.undefined;",
+									"    pm.expect(jsonData.description).to.be.a('string');",
+									"    pm.expect(jsonData.incidentType).to.eql('ROBBERY');",
+									"    pm.expect(jsonData.status).to.eql('PENDING');",
+									"    pm.expect(jsonData.source).to.eql('CITIZEN_TEXT');",
+									"    pm.expect(jsonData.address).to.include('Pasto');",
+									"    pm.collectionVariables.set('reportId', jsonData.id);",
+									"    console.log('✅ reportId guardado: ' + jsonData.id);",
+									"});",
+									"",
+									"pm.test('Coordenadas son de Pasto, Nariño', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.latitude).to.eql(1.2136);",
+									"    pm.expect(jsonData.longitude).to.eql(-77.2811);",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"description\": \"Robo de celular en la esquina de la Calle 18 con Carrera 27, cerca al Centro Comercial Sebastián de Belalcázar\",\n    \"incidentType\": \"ROBBERY\",\n    \"address\": \"Calle 18 #27-45, Centro, Pasto, Nariño\",\n    \"source\": \"CITIZEN_TEXT\",\n    \"latitude\": 1.2136,\n    \"longitude\": -77.2811\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports"]
+						},
+						"description": "Crea un nuevo reporte de incidente en Pasto, Nariño. El ID se captura automáticamente.\n\n📡 WebSocket: Al crear, se notifica a:\n- /topic/reports/ROBBERY (canal del tipo)\n- /topic/reports/ALL (canal global)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Reports (paginated)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta es paginada con content', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.content).to.be.an('array');",
+									"    pm.expect(jsonData.content.length).to.be.greaterThan(0);",
+									"    pm.expect(jsonData.totalElements).to.be.a('number');",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports?page=0&size=20&sort=reportDate&direction=DESC",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports"],
+							"query": [
+								{ "key": "page", "value": "0" },
+								{ "key": "size", "value": "20" },
+								{ "key": "sort", "value": "reportDate" },
+								{ "key": "direction", "value": "DESC" }
+							]
+						},
+						"description": "Lista todos los reportes con paginación."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Report by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene el reporte correcto', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.eql(Number(pm.collectionVariables.get('reportId')));",
+									"    pm.expect(jsonData.incidentType).to.eql('ROBBERY');",
+									"    pm.expect(jsonData.status).to.be.a('string');",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports/{{reportId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports", "{{reportId}}"]
+						},
+						"description": "Obtiene el reporte creado previamente por su ID dinámico."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Report",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Descripción fue actualizada', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.eql(Number(pm.collectionVariables.get('reportId')));",
+									"    pm.expect(jsonData.description).to.include('ACTUALIZADO');",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"description\": \"Robo de celular ACTUALIZADO - se identificó al sospechoso cerca de la Plaza de Nariño\",\n    \"incidentType\": \"ROBBERY\",\n    \"address\": \"Calle 18 #27-45, Centro, Pasto, Nariño\",\n    \"source\": \"CITIZEN_TEXT\",\n    \"latitude\": 1.2136,\n    \"longitude\": -77.2811\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports/{{reportId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports", "{{reportId}}"]
+						},
+						"description": "Actualiza el reporte creado previamente.\n\n📡 WebSocket: Notifica a /topic/reports/updated"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Report",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 204 No Content', function () {",
+									"    pm.response.to.have.status(204);",
+									"});",
+									"",
+									"pm.test('Body está vacío', function () {",
+									"    pm.expect(pm.response.text()).to.be.oneOf(['', undefined]);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports/{{reportId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports", "{{reportId}}"]
+						},
+						"description": "Elimina el reporte creado previamente.\n\n📡 WebSocket: Notifica a /topic/reports/deleted"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Alerts",
+			"description": "Endpoints de preferencias de alerta del usuario.\n\n⚠️ Todos requieren autenticación JWT.\nEl ID de la preferencia se captura automáticamente al crearla.",
+			"item": [
+				{
+					"name": "Create/Update Preference",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 201 Created', function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test('Respuesta contiene preferencia creada', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.id).to.not.be.undefined;",
+									"    pm.expect(jsonData.incidentType).to.eql('ROBBERY');",
+									"    pm.expect(jsonData.enabled).to.eql(true);",
+									"    pm.collectionVariables.set('preferenceId', jsonData.id);",
+									"    console.log('✅ preferenceId guardado: ' + jsonData.id);",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"incidentType\": \"ROBBERY\",\n    \"enabled\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/alerts/preferences",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "alerts", "preferences"]
+						},
+						"description": "Crea una preferencia de alerta para ROBBERY."
+					},
+					"response": []
+				},
+				{
+					"name": "Get My Preferences",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta es un array de preferencias', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.be.an('array');",
+									"    pm.expect(jsonData.length).to.be.greaterThan(0);",
+									"});",
+									"",
+									"pm.test('Contiene la preferencia ROBBERY', function () {",
+									"    var jsonData = pm.response.json();",
+									"    var robbery = jsonData.find(function(p) { return p.incidentType === 'ROBBERY'; });",
+									"    pm.expect(robbery).to.not.be.undefined;",
+									"    pm.expect(robbery.enabled).to.eql(true);",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/alerts/preferences",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "alerts", "preferences"]
+						},
+						"description": "Obtiene todas las preferencias del usuario autenticado."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Active Preferences",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Respuesta es un array', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.be.an('array');",
+									"});",
+									"",
+									"pm.test('Todas las preferencias están activas', function () {",
+									"    var jsonData = pm.response.json();",
+									"    jsonData.forEach(function(pref) {",
+									"        pm.expect(pref.enabled).to.eql(true);",
+									"    });",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/alerts/preferences/active",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "alerts", "preferences", "active"]
+						},
+						"description": "Obtiene solo las preferencias activas (enabled=true)."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Preference",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 204 No Content', function () {",
+									"    pm.response.to.have.status(204);",
+									"});",
+									"",
+									"pm.test('Body está vacío', function () {",
+									"    pm.expect(pm.response.text()).to.be.oneOf(['', undefined]);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/alerts/preferences/{{preferenceId}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "alerts", "preferences", "{{preferenceId}}"]
+						},
+						"description": "Elimina la preferencia creada previamente."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Notifications",
+			"description": "Notificaciones en tiempo real vía WebSocket/STOMP.\n\nEl backend usa Spring WebSocket con STOMP para enviar notificaciones push cuando se crean, actualizan o eliminan reportes.\n\n**Endpoint WebSocket:** ws://localhost:8080/ws\n**Endpoint SockJS (fallback):** http://localhost:8080/ws-sockjs\n\n**Topics STOMP disponibles:**\n- `/topic/reports/{TYPE}` → Notificaciones por tipo (ej: /topic/reports/ROBBERY)\n- `/topic/reports/ALL` → Todos los reportes nuevos\n- `/topic/reports/updated` → Reportes actualizados\n- `/topic/reports/deleted` → Reportes eliminados\n\n**Tipos de incidente válidos para suscripción:**\n- ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER\n\n**Ejemplo de suscripción con StompJs:**\n```javascript\nconst client = new StompJs.Client({\n    brokerURL: 'ws://localhost:8080/ws'\n});\nclient.onConnect = () => {\n    client.subscribe('/topic/reports/ALL', (msg) => {\n        console.log(JSON.parse(msg.body));\n    });\n};\nclient.activate();\n```\n\n⚠️ Las notificaciones se disparan automáticamente al usar los endpoints de Reports (Create, Update, Delete). No hay endpoints REST para notificaciones.\n\nLos requests de esta carpeta validan que el servidor WebSocket y el health endpoint estén activos.",
+			"item": [
+				{
+					"name": "Health Check (servidor activo)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Servidor está activo', function () {",
+									"    var body = pm.response.text();",
+									"    pm.expect(body.length).to.be.greaterThan(0);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "Verifica que el servidor backend está activo y respondiendo.\nEsto confirma que el sistema de notificaciones WebSocket también está disponible."
+					},
+					"response": []
+				},
+				{
+					"name": "WebSocket Info (endpoint disponible)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"// El endpoint /ws-sockjs/info es un endpoint HTTP que SockJS expone",
+									"// para dar información del servidor WebSocket.",
+									"pm.test('Status code es 200 OK', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('SockJS info contiene websocket flag', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.websocket).to.not.be.undefined;",
+									"});",
+									"",
+									"pm.test('Content-Type es application/json', function () {",
+									"    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/ws-sockjs/info",
+							"host": ["{{base_url}}"],
+							"path": ["ws-sockjs", "info"]
+						},
+						"description": "Valida que el endpoint SockJS WebSocket está disponible.\n\nSockJS expone /ws-sockjs/info como endpoint HTTP que retorna información del servidor WebSocket, incluyendo si WebSocket está habilitado.\n\nEsto confirma que el sistema de notificaciones en tiempo real está operativo."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Security Tests",
+			"description": "Tests de seguridad que verifican que los endpoints protegidos retornan 403 Forbidden cuando NO se envía el header Authorization.\n\nSpring Security retorna 403 por defecto cuando no hay token JWT.\n\n⚠️ Estos requests NO llevan token a propósito. El test valida que la API rechaza correctamente las peticiones sin autenticación.",
+			"item": [
+				{
+					"name": "Create Report sin token (403)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 403 Forbidden', function () {",
+									"    pm.response.to.have.status(403);",
+									"});",
+									"",
+									"pm.test('Acceso denegado sin token', function () {",
+									"    pm.expect(pm.response.code).to.eql(403);",
+									"    console.log('🔒 Correcto: POST /reports rechazado sin token');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"description\": \"Este reporte NO debería crearse porque no hay token\",\n    \"incidentType\": \"ROBBERY\",\n    \"address\": \"Calle 18 #27-45, Centro, Pasto, Nariño\",\n    \"source\": \"CITIZEN_TEXT\",\n    \"latitude\": 1.2136,\n    \"longitude\": -77.2811\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/reports",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "reports"]
+						},
+						"description": "Intenta crear un reporte SIN token JWT.\n\nDebe retornar 403 Forbidden porque POST /reports requiere autenticación."
+					},
+					"response": []
+				},
+				{
+					"name": "Create Preference sin token (403)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 403 Forbidden', function () {",
+									"    pm.response.to.have.status(403);",
+									"});",
+									"",
+									"pm.test('Acceso denegado sin token', function () {",
+									"    pm.expect(pm.response.code).to.eql(403);",
+									"    console.log('🔒 Correcto: POST /alerts/preferences rechazado sin token');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"incidentType\": \"ROBBERY\",\n    \"enabled\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/alerts/preferences",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "alerts", "preferences"]
+						},
+						"description": "Intenta crear una preferencia SIN token JWT.\n\nDebe retornar 403 Forbidden."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User sin token (403)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('Status code es 403 Forbidden', function () {",
+									"    pm.response.to.have.status(403);",
+									"});",
+									"",
+									"pm.test('Acceso denegado sin token', function () {",
+									"    pm.expect(pm.response.code).to.eql(403);",
+									"    console.log('🔒 Correcto: PUT /users rechazado sin token');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Hacker intento\",\n    \"email\": \"hacker@evil.com\",\n    \"cedula\": \"99999999\",\n    \"password\": \"nosedebeactualizar\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/users/1",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "users", "1"]
+						},
+						"description": "Intenta actualizar un usuario SIN token JWT.\n\nDebe retornar 403 Forbidden."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}
