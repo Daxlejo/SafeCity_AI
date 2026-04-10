@@ -1,7 +1,6 @@
 package com.safecityai.backend.dto;
 
 import com.safecityai.backend.model.enums.RiskLevel;
-import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -22,7 +21,5 @@ public class ZoneResponseDTO {
     private Double centerLng;
     private Double radius;
     private Integer reportCount;
-
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime lastUpdated;
 }

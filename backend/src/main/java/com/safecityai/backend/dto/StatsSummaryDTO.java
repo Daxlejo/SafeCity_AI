@@ -6,7 +6,6 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
-import java.util.Map;
 
 @Data
 @Builder
@@ -14,17 +13,17 @@ import java.util.Map;
 @AllArgsConstructor
 public class StatsSummaryDTO {
 
-    // Resumen general
+    // Totales para las tarjetas del dashboard
     private Long totalReports;
-    private Long totalZones;
+    private Long pendingReports;
+    private Long verifiedReports;
+    private Long rejectedReports;
     private Long totalUsers;
+    private Long totalZones;
 
-    // Conteo por tipo de incidente: {"ROBBERY": 15, "ACCIDENT": 8, ...}
-    private Map<String, Long> byType;
+    // Conteo por tipo de incidente (para la grafica de barras)
+    private List<TypeCountDTO> reportsByType;
 
-    // Conteo por zona: {"Centro Histórico": 20, "Zona Norte": 5, ...}
-    private Map<String, Long> byZone;
-
-    // Tendencia semanal: [{"date": "2026-04-01", "count": 5}, ...]
-    private List<Map<String, Object>> timeline;
+    // Datos para el heatmap: lista de puntos [lat, lng, intensidad]
+    private List<HeatmapPointDTO> heatmapData;
 }

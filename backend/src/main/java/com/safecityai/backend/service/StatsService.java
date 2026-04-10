@@ -1,106 +1,76 @@
 package com.safecityai.backend.service;
 
+import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
+import com.safecityai.backend.dto.TypeCountDTO;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.enums.IncidentType;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.repository.ZoneRepository;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.util.*;
+import java.util.List;
 import java.util.stream.Collectors;
 
-@Slf4j
 @Service
-@RequiredArgsConstructor
 public class StatsService {
 
     private final ReportRepository reportRepository;
-    private final ZoneRepository zoneRepository;
     private final UserRepository userRepository;
+    private final ZoneRepository zoneRepository;
 
-    // Resumen general: totales + breakdown por tipo + por zona + timeline
-    @Transactional(readOnly = true)
+    public StatsService(ReportRepository reportRepository,
+                        UserRepository userRepository,
+                        ZoneRepository zoneRepository) {
+        this.reportRepository = reportRepository;
+        this.userRepository = userRepository;
+        this.zoneRepository = zoneRepository;
+    }
+
+    // Resumen completo para el dashboard
     public StatsSummaryDTO getSummary() {
-        log.debug("Generando resumen de estadísticas");
-
-        List<Report> allReports = reportRepository.findAll();
-
         return StatsSummaryDTO.builder()
-                .totalReports((long) allReports.size())
-                .totalZones(zoneRepository.count())
+                .totalReports(reportRepository.count())
+                .pendingReports(reportRepository.countByStatus(ReportStatus.PENDING))
+                .verifiedReports(reportRepository.countByStatus(ReportStatus.VERIFIED))
+                .rejectedReports(reportRepository.countByStatus(ReportStatus.REJECTED))
                 .totalUsers(userRepository.count())
-                .byType(countByType(allReports))
-                .byZone(countByZone(allReports))
-                .timeline(buildTimeline(allReports))
+                .totalZones(zoneRepository.count())
+                .reportsByType(getReportsByType())
+                .heatmapData(getHeatmapData())
                 .build();
     }
 
-    // Conteo por tipo de incidente
-    @Transactional(readOnly = true)
-    public Map<String, Long> getByType() {
-        return countByType(reportRepository.findAll());
+    // Conteo por tipo → grafica de barras
+    public List<TypeCountDTO> getReportsByType() {
+        return reportRepository.countByIncidentType().stream()
+                .map(row -> TypeCountDTO.builder()
+                        .type((IncidentType) row[0])
+                        .count((Long) row[1])
+                        .build())
+                .collect(Collectors.toList());
     }
 
-    // Conteo por zona
-    @Transactional(readOnly = true)
-    public Map<String, Long> getByZone() {
-        return countByZone(reportRepository.findAll());
+    // Datos para el heatmap del frontend
+    public List<HeatmapPointDTO> getHeatmapData() {
+        return reportRepository.findAllWithCoordinates().stream()
+                .map(report -> HeatmapPointDTO.builder()
+                        .latitude(report.getLatitude())
+                        .longitude(report.getLongitude())
+                        .intensity(calculateIntensity(report))
+                        .build())
+                .collect(Collectors.toList());
     }
 
-    // Tendencia de los últimos 7 días
-    @Transactional(readOnly = true)
-    public List<Map<String, Object>> getTimeline() {
-        return buildTimeline(reportRepository.findAll());
-    }
-
-    // ═══════════════ HELPERS ═══════════════
-
-    private Map<String, Long> countByType(List<Report> reports) {
-        return reports.stream()
-                .collect(Collectors.groupingBy(
-                        r -> r.getIncidentType().name(),
-                        Collectors.counting()
-                ));
-    }
-
-    private Map<String, Long> countByZone(List<Report> reports) {
-        return reports.stream()
-                .filter(r -> r.getZone() != null)
-                .collect(Collectors.groupingBy(
-                        r -> r.getZone().getName(),
-                        Collectors.counting()
-                ));
-    }
-
-    private List<Map<String, Object>> buildTimeline(List<Report> reports) {
-        // Últimos 7 días
-        LocalDate today = LocalDate.now();
-        List<Map<String, Object>> timeline = new ArrayList<>();
-
-        for (int i = 6; i >= 0; i--) {
-            LocalDate date = today.minusDays(i);
-            LocalDateTime startOfDay = date.atStartOfDay();
-            LocalDateTime endOfDay = date.atTime(LocalTime.MAX);
-
-            long count = reports.stream()
-                    .filter(r -> r.getReportDate() != null)
-                    .filter(r -> !r.getReportDate().isBefore(startOfDay) &&
-                                 !r.getReportDate().isAfter(endOfDay))
-                    .count();
-
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("date", date.toString());
-            entry.put("count", count);
-            timeline.add(entry);
-        }
-
-        return timeline;
+    // Intensidad del punto segun el estado del reporte
+    private Double calculateIntensity(Report report) {
+        return switch (report.getStatus()) {
+            case VERIFIED -> 1.0;    // Verificado = maxima intensidad
+            case PENDING -> 0.5;     // Pendiente = media
+            case RESOLVED -> 0.3;    // Resuelto = baja
+            case REJECTED -> 0.1;    // Rechazado = minima
+        };
     }
 }

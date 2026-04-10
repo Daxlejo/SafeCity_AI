@@ -104,6 +104,6 @@ public class ReportCreateDTO {
     @DecimalMax(value = "180.0", message = "La longitud debe ser menor o igual a 180")
     private Double longitude;
 
-    // Zona asociada al reporte (opcional)
-    private Long zoneId;
+    // URL de la foto del incidente (opcional, sube el trust score)
+    private String photoUrl;
 }

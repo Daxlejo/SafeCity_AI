@@ -4,9 +4,8 @@ import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
-import com.safecityai.backend.model.Zone;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
-import com.safecityai.backend.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -21,28 +20,13 @@ public class ReportService {
 
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
-    private final ZoneRepository zoneRepository;
-    private final ZoneService zoneService;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto) {
         log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
 
         Report report = convertToEntity(dto);
-
-        // Si viene zoneId, asignar la zona al reporte
-        if (dto.getZoneId() != null) {
-            Zone zone = zoneRepository.findById(dto.getZoneId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Zona", "id", dto.getZoneId()));
-            report.setZone(zone);
-        }
-
         Report savedReport = reportRepository.save(report);
-
-        // Si el reporte tiene zona, incrementar el contador de reportes de esa zona
-        if (savedReport.getZone() != null) {
-            zoneService.incrementReportCount(savedReport.getZone().getId());
-        }
         ReportResponseDTO response = convertToDTO(savedReport);
 
         // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
@@ -97,6 +81,15 @@ public class ReportService {
         log.info("Reporte ID: {} eliminado exitosamente", id);
     }
 
+    // Actualizar status de un reporte (para moderacion admin)
+    @Transactional
+    public void updateStatus(Long id, ReportStatus newStatus) {
+        Report report = findReportOrThrow(id);
+        report.setStatus(newStatus);
+        reportRepository.save(report);
+        log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
+    }
+
     // ═══════════════ HELPERS ═══════════════
     // Nos ayudan a mantener el codigo limpio y organizado
 
@@ -124,6 +117,8 @@ public class ReportService {
             report.setLatitude(dto.getLatitude());
         if (dto.getLongitude() != null)
             report.setLongitude(dto.getLongitude());
+        if (dto.getPhotoUrl() != null)
+            report.setPhotoUrl(dto.getPhotoUrl());
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {
@@ -134,11 +129,12 @@ public class ReportService {
                 .source(dto.getSource())
                 .latitude(dto.getLatitude())
                 .longitude(dto.getLongitude())
+                .photoUrl(dto.getPhotoUrl())
                 .build();
     }
 
     private ReportResponseDTO convertToDTO(Report report) {
-        ReportResponseDTO.ReportResponseDTOBuilder builder = ReportResponseDTO.builder()
+        return ReportResponseDTO.builder()
                 .id(report.getId())
                 .description(report.getDescription())
                 .incidentType(report.getIncidentType())
@@ -147,14 +143,9 @@ public class ReportService {
                 .source(report.getSource())
                 .latitude(report.getLatitude())
                 .longitude(report.getLongitude())
-                .reportDate(report.getReportDate());
-
-        // Incluir datos de zona si existe
-        if (report.getZone() != null) {
-            builder.zoneId(report.getZone().getId())
-                   .zoneName(report.getZone().getName());
-        }
-
-        return builder.build();
+                .photoUrl(report.getPhotoUrl())
+                .trustScore(report.getTrustScore())
+                .reportDate(report.getReportDate())
+                .build();
     }
 }

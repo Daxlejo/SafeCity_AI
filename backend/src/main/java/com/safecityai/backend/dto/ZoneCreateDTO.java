@@ -1,5 +1,6 @@
 package com.safecityai.backend.dto;
 
+import com.safecityai.backend.model.enums.RiskLevel;
 import jakarta.validation.constraints.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -11,21 +12,19 @@ import lombok.NoArgsConstructor;
 public class ZoneCreateDTO {
 
     @NotBlank(message = "El nombre de la zona es obligatorio")
-    @Size(max = 100, message = "El nombre no puede exceder 100 caracteres")
+    @Size(max = 100)
     private String name;
 
-    @NotNull(message = "La latitud central es obligatoria")
-    @DecimalMin(value = "-90.0", message = "La latitud debe ser mayor o igual a -90")
-    @DecimalMax(value = "90.0", message = "La latitud debe ser menor o igual a 90")
+    // Coordenadas del centro de la zona
+    @NotNull(message = "La latitud es obligatoria")
     private Double centerLat;
 
-    @NotNull(message = "La longitud central es obligatoria")
-    @DecimalMin(value = "-180.0", message = "La longitud debe ser mayor o igual a -180")
-    @DecimalMax(value = "180.0", message = "La longitud debe ser menor o igual a 180")
+    @NotNull(message = "La longitud es obligatoria")
     private Double centerLng;
 
-    @NotNull(message = "El radio es obligatorio")
-    @DecimalMin(value = "50.0", message = "El radio mínimo es 50 metros")
-    @DecimalMax(value = "10000.0", message = "El radio máximo es 10000 metros")
+    // Radio en metros (por defecto 500m si no se envia)
     private Double radius;
+
+    // Nivel de riesgo (si no se envia, se calcula automaticamente)
+    private RiskLevel riskLevel;
 }

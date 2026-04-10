@@ -6,8 +6,6 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
 
@@ -23,7 +21,7 @@ public class Zone {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 100)
+    @Column(nullable = false, length = 100)
     private String name;
 
     @Builder.Default
@@ -31,26 +29,23 @@ public class Zone {
     @Column(name = "risk_level", nullable = false)
     private RiskLevel riskLevel = RiskLevel.LOW;
 
+    // Centro de la zona (coordenadas)
     @Column(name = "center_lat", nullable = false)
     private Double centerLat;
 
     @Column(name = "center_lng", nullable = false)
     private Double centerLng;
 
-    // Radio en metros que define el área de la zona
+    // Radio en metros 
+    @Builder.Default
     @Column(nullable = false)
-    private Double radius;
+    private Double radius = 500.0;
 
-    // Contador de reportes asociados a esta zona
+    // Cantidad de reportes en esta zona
     @Builder.Default
     @Column(name = "report_count")
     private Integer reportCount = 0;
 
-    @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
-
-    @UpdateTimestamp
     @Column(name = "last_updated")
     private LocalDateTime lastUpdated;
 }
