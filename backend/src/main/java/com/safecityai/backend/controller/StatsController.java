@@ -40,8 +40,8 @@ public class StatsController {
 
     // GET /api/v1/stats/by-zone → conteo por zona
     @GetMapping("/by-zone")
-    public ResponseEntity<java.util.Map<Long, Long>> getByZone() {
-        return ResponseEntity.ok(statsService.getReportsByZone());
+    public ResponseEntity<java.util.Map<String, Long>> getByZone() {
+        return ResponseEntity.ok(statsService.getReportsByZoneNames());
     }
 
     // GET /api/v1/stats/timeline → ultimos 7 reportes por dia

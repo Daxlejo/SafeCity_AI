@@ -7,6 +7,7 @@ import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.Zone;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
+import com.safecityai.backend.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -21,6 +22,7 @@ public class ReportService {
 
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
+    private final ZoneRepository zoneRepository;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto) {
@@ -146,6 +148,8 @@ public class ReportService {
         String zoneName = null;
         if (report.getZone() != null && report.getZone().getName() != null) {
             zoneName = report.getZone().getName();
+        } else if (report.getZoneId() != null) {
+            zoneName = zoneRepository.findById(report.getZoneId()).map(Zone::getName).orElse(null);
         }
 
         return ReportResponseDTO.builder()

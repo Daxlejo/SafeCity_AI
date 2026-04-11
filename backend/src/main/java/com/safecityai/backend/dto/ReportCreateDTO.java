@@ -103,4 +103,16 @@ public class ReportCreateDTO {
     @DecimalMin(value = "-180.0", message = "La longitud debe ser mayor o igual a -180")
     @DecimalMax(value = "180.0", message = "La longitud debe ser menor o igual a 180")
     private Double longitude;
+
+    // Campos faltantes agregados en este sprint:
+    
+    /**
+     * URL de la foto de evidencia. (Opcional)
+     */
+    private String photoUrl;
+
+    /**
+     * ID de la Zona de Riesgo a la que pertenece orgánicamente este reporte. (Opcional).
+     */
+    private Long zoneId;
 }
