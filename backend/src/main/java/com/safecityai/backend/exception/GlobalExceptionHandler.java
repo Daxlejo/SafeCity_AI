@@ -99,6 +99,22 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 400 - BAD REQUEST
+     * Se dispara con IllegalArgumentException (ej: credenciales inválidas, email duplicado).
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Solicitud inválida",
+                ex.getMessage()
+        );
+
+        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
      * 500 - INTERNAL SERVER ERROR
      * Captura CUALQUIER otra excepción no manejada.
      * Actúa como red de seguridad para que nunca se exponga
