@@ -56,7 +56,6 @@ public class UserService {
     public AuthResponseDTO login(UserLoginDTO dto) {
         String identifier = dto.getIdentifier().trim();
 
-        // Si contiene @ es email, si no es cedula
         User user;
         if (identifier.contains("@")) {
             user = userRepository.findByEmail(identifier)
