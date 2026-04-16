@@ -40,10 +40,9 @@ public class SecurityConfig {
                         // GET de reportes es público (el mapa lo necesita sin login)
                         .requestMatchers(HttpMethod.GET, "/api/v1/reports/**").permitAll()
 
-                        // Zonas: GET publico, POST/PUT/DELETE para cualquier autenticado
+                        // GET de zonas y stats son publicos (para mapa y dashboard)
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
-                        .requestMatchers("/api/v1/zones/**").authenticated()
-                        // Stats: GET publico (para mapa y dashboard)
+                        .requestMatchers("/api/v1/zones/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
 
                         // OSINT: publico para permitir busquedas y triggers automaticos
@@ -53,8 +52,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/uploads/**").permitAll()
 
                         // Todo lo demás requiere autenticación
-                        .anyRequest().authenticated()
-                )
+                        .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

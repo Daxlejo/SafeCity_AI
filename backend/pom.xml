@@ -88,13 +88,13 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
-		<!-- Spring Security: Auth + BCrypt -->
+		<!-- Spring Security: Autenticación y encriptación de contraseñas -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
 
-		<!-- JWT: Tokens de autenticación stateless -->
+		<!-- JWT: Librerias para crear y validar Tokens de autenticación stateless -->
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
