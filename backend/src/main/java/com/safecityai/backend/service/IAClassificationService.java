@@ -62,8 +62,13 @@ public class IAClassificationService {
         try {
             // FASE 2: Intentar con Gemini
             result = classifyWithGemini(report);
+            log.info("[IA] Reporte {} clasificado con GEMINI (score: {})",
+                    reportId, result.getTrustScore());
         } catch (Exception e) {
             // FALLBACK: Si Gemini falla, usar heuristica
+            // Logueamos el error REAL para diagnosticar por qué Gemini no funciona
+            log.warn("[IA] Gemini falló para reporte {}. Razón: {}. Usando heurística.",
+                    reportId, e.getMessage());
             result = classifyWithHeuristics(report);
             result.setReasoning("[Fallback heuristico] " + result.getReasoning());
         }
@@ -190,6 +195,7 @@ public class IAClassificationService {
         prompt.append("}\n\n");
 
         prompt.append("REGLAS de puntuación:\n");
+        prompt.append("- REGLA CRÍTICA DE GIBBERISH: Si la descripción contiene texto sin sentido, caracteres aleatorios, palabras inventadas, o NO describe un incidente real y específico, el trustScore DEBE SER 0. Ejemplos de gibberish: 'asdfgh', 'jjjjjj', 'hola hola hola', 'test123'.\n");
         prompt.append("- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
         prompt.append("- Descripcion detallada y coherente: +20 a +30 puntos\n");
         prompt.append("- Tiene coordenadas GPS: +15 puntos\n");
@@ -300,17 +306,25 @@ public class IAClassificationService {
     }
 
     private double calculateTrustScore(Report report) {
+        String desc = report.getDescription();
+
+        // ═══ VALIDACIÓN ANTI-GIBBERISH ═══
+        // Si el texto es basura, retornamos 0 INMEDIATAMENTE
+        // No importa si tiene GPS, foto, etc. → texto sin sentido = score 0
+        if (desc == null || desc.isBlank() || isGibberish(desc)) {
+            log.info("[Heuristica] Texto detectado como gibberish/vacío: '{}'",
+                    desc != null ? desc.substring(0, Math.min(desc.length(), 30)) : "null");
+            return 0.0;
+        }
+
         double score = 30.0;
 
-        String desc = report.getDescription();
-        if (desc != null) {
-            if (desc.length() > 100)
-                score += 25;
-            else if (desc.length() > 50)
-                score += 15;
-            else if (desc.length() > 20)
-                score += 5;
-        }
+        if (desc.length() > 100)
+            score += 25;
+        else if (desc.length() > 50)
+            score += 15;
+        else if (desc.length() > 20)
+            score += 5;
 
         if (report.getLatitude() != null && report.getLongitude() != null) {
             score += 20;
@@ -331,6 +345,68 @@ public class IAClassificationService {
         }
 
         return Math.min(score, 100.0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // DETECTOR DE GIBBERISH (texto sin sentido)
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // ¿Cómo funciona?
+    // Un texto real en español tiene:
+    //   1. Proporción de vocales entre 35-55% (ej: "robo a mano armada")
+    //   2. Palabras reconocibles (al menos algunas del vocabulario base)
+    //   3. Longitud mínima razonable
+    //
+    // Gibberish como "gjhglyuyuyuyu" tiene:
+    //   - Ratio de vocales anormal
+    //   - Cero palabras reconocibles
+    //   - Caracteres repetidos sin sentido
+    //
+    private boolean isGibberish(String text) {
+        if (text == null || text.isBlank()) return true;
+
+        String clean = text.toLowerCase().replaceAll("[^a-záéíóúñü\\s]", "").trim();
+        if (clean.length() < 5) return true;
+
+        // 1. Ratio de vocales — español normal ≈ 40-50%
+        long vowels = clean.chars().filter(c -> "aeiouáéíóú".indexOf(c) >= 0).count();
+        long letters = clean.chars().filter(Character::isLetter).count();
+        if (letters > 0) {
+            double ratio = (double) vowels / letters;
+            // Si ratio < 15% o > 70% → probablemente gibberish
+            if (ratio < 0.15 || ratio > 0.70) return true;
+        }
+
+        // 2. Verificar que contenga al menos 1 palabra real en español
+        String[] palabrasReales = {
+            "robo", "atraco", "hurto", "asalto", "accidente", "choque",
+            "moto", "carro", "calle", "avenida", "barrio", "casa",
+            "persona", "personas", "hombre", "mujer", "arma", "cuchillo",
+            "pistola", "noche", "dia", "fue", "hubo", "hay", "esta",
+            "estan", "paso", "ocurrio", "zona", "lugar", "cerca",
+            "ayuda", "policia", "herido", "muerto", "sangre",
+            "tienda", "banco", "parque", "esquina", "semaforo",
+            "transito", "trafico", "vehiculo", "bus", "taxi",
+            "peligro", "peligroso", "sospechoso", "robaron", "atacaron",
+            "armada", "blanca", "fuego", "disparo", "disparos"
+        };
+
+        String lowerText = text.toLowerCase();
+        boolean tieneAlMenosUnaPalabraReal = false;
+        for (String palabra : palabrasReales) {
+            if (lowerText.contains(palabra)) {
+                tieneAlMenosUnaPalabraReal = true;
+                break;
+            }
+        }
+
+        // 3. Si no tiene ninguna palabra real Y tiene menos de 30 chars → gibberish
+        if (!tieneAlMenosUnaPalabraReal && clean.length() < 30) return true;
+
+        // 4. Detectar caracteres repetidos (ej: "aaaaaa", "jjjjj")
+        if (clean.replaceAll("(.)\\1{3,}", "").length() < clean.length() / 2) return true;
+
+        return false;
     }
 
     private IncidentType detectIncidentType(String description) {

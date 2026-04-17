@@ -21,12 +21,26 @@ public class ReportService {
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
     private final IAClassificationService iaClassificationService;
+    private final GeocodingService geocodingService;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto) {
         log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
 
         Report report = convertToEntity(dto);
+
+        // ═══════════════ REVERSE GEOCODING ═══════════════
+        // Si el usuario envió coordenadas GPS pero NO dirección,
+        // convertimos las coordenadas a nombre de barrio automáticamente
+        // Ejemplo: (1.2136, -77.2784) → "Anganoy, Pasto"
+        if (report.getLatitude() != null && report.getLongitude() != null
+                && (report.getAddress() == null || report.getAddress().isBlank())) {
+            String address = geocodingService.reverseGeocode(
+                    report.getLatitude(), report.getLongitude());
+            report.setAddress(address);
+            log.info("Geocoding: ({}, {}) → {}", report.getLatitude(), report.getLongitude(), address);
+        }
+
         Report savedReport = reportRepository.save(report);
         ReportResponseDTO response = convertToDTO(savedReport);
 
