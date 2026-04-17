@@ -47,6 +47,7 @@ public class UserService {
                 .email(dto.getEmail())
                 .cedula(dto.getCedula())
                 .passwordHash(passwordEncoder.encode(dto.getPassword()))
+                .role(UserRole.CITIZEN) // Fija explícitamente el rol CITIZEN
                 .build();
 
         User saved = userRepository.save(user);
