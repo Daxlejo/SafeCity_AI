@@ -107,7 +107,11 @@ public class ReportService {
     public void updateStatus(Long id, ReportStatus newStatus) {
         Report report = findReportOrThrow(id);
         report.setStatus(newStatus);
-        reportRepository.save(report);
+        report = reportRepository.save(report);
+        
+        // ¡CRUCIAL para que los usuarios vean el cambio de estado en vivo!
+        notificationService.notifyReportUpdated(convertToDTO(report));
+        
         log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
     }
 
