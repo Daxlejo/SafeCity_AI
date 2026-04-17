@@ -226,14 +226,50 @@ public class IAClassificationService {
     }
 
     /**
-     * Hace la petición HTTP a OpenRouter (API compatible con OpenAI).
-     * Endpoint: POST https://openrouter.ai/api/v1/chat/completions
+     * Hace la petición HTTP a OpenRouter con RETRY y FALLBACK.
+     *
+     * Estrategia anti-rate-limit:
+     * 1. Intenta con el modelo principal (Gemma 3 12B)
+     * 2. Si da 429 → espera 3 seg → reintenta
+     * 3. Si sigue fallando → prueba con modelo alternativo (Llama 3.2 3B)
+     * 4. Si todo falla → lanza excepción → cae a la heurística
      */
+    private static final String FALLBACK_MODEL = "meta-llama/llama-3.2-3b-instruct:free";
+    private static final int RETRY_DELAY_MS = 3000;
+
     private String callOpenRouterAPI(String prompt) {
+        // Intento 1: modelo principal
+        try {
+            return doOpenRouterCall(prompt, openRouterModel);
+        } catch (Exception e1) {
+            if (!e1.getMessage().contains("429")) throw e1;
+
+            log.info("[IA] Modelo {} rate-limited, reintentando en {}ms...",
+                    openRouterModel, RETRY_DELAY_MS);
+        }
+
+        // Esperar antes de reintentar
+        try { Thread.sleep(RETRY_DELAY_MS); } catch (InterruptedException ignored) {}
+
+        // Intento 2: mismo modelo después de esperar
+        try {
+            return doOpenRouterCall(prompt, openRouterModel);
+        } catch (Exception e2) {
+            if (!e2.getMessage().contains("429")) throw e2;
+
+            log.info("[IA] Modelo {} sigue rate-limited, probando fallback: {}",
+                    openRouterModel, FALLBACK_MODEL);
+        }
+
+        // Intento 3: modelo alternativo (Llama 3.2 3B)
+        return doOpenRouterCall(prompt, FALLBACK_MODEL);
+    }
+
+    private String doOpenRouterCall(String prompt, String model) {
         String url = "https://openrouter.ai/api/v1/chat/completions";
 
         Map<String, Object> body = Map.of(
-                "model", openRouterModel,
+                "model", model,
                 "messages", List.of(
                         Map.of("role", "user", "content", prompt)),
                 "temperature", 0.3,
@@ -250,6 +286,7 @@ public class IAClassificationService {
         ResponseEntity<String> response = restTemplate.exchange(
                 url, HttpMethod.POST, request, String.class);
 
+        log.info("[IA] Respuesta exitosa de OpenRouter usando modelo: {}", model);
         return response.getBody();
     }
 
