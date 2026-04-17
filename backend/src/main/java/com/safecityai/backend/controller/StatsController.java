@@ -1,5 +1,6 @@
 package com.safecityai.backend.controller;
 
+import com.safecityai.backend.dto.DangerousZoneDTO;
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
@@ -53,5 +54,13 @@ public class StatsController {
     public ResponseEntity<List<ReportResponseDTO>> getTimeline(
             @RequestParam(defaultValue = "20") int limit) {
         return ResponseEntity.ok(statsService.getTimeline(limit));
+    }
+
+    // GET /api/v1/stats/dangerous-zones?days=7&limit=10 → ranking de zonas peligrosas
+    @GetMapping("/dangerous-zones")
+    public ResponseEntity<List<DangerousZoneDTO>> getDangerousZones(
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(defaultValue = "10") int limit) {
+        return ResponseEntity.ok(statsService.getDangerousZones(days, limit));
     }
 }

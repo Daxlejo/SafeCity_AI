@@ -30,4 +30,8 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     @Query("SELECT r FROM Report r WHERE r.latitude BETWEEN :minLat AND :maxLat " +
            "AND r.longitude BETWEEN :minLng AND :maxLng ORDER BY r.reportDate DESC")
     List<Report> findByArea(double minLat, double maxLat, double minLng, double maxLng);
+
+    // Reportes recientes (últimos N días) para ranking semanal
+    @Query("SELECT r FROM Report r WHERE r.reportDate >= :since AND r.latitude IS NOT NULL")
+    List<Report> findRecentWithCoordinates(java.time.LocalDateTime since);
 }

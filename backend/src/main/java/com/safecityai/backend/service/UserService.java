@@ -6,14 +6,17 @@ import com.safecityai.backend.dto.UserRegisterDTO;
 import com.safecityai.backend.dto.UserResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.User;
+import com.safecityai.backend.model.enums.UserRole;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.security.JwtService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 public class UserService {
 
@@ -69,6 +72,11 @@ public class UserService {
             throw new IllegalArgumentException("Credenciales inválidas");
         }
 
+        // Verificar si el usuario está baneado
+        if (Boolean.FALSE.equals(user.getActive())) {
+            throw new IllegalArgumentException("Tu cuenta ha sido suspendida. Contacta al administrador.");
+        }
+
         String token = jwtService.generateToken(user.getEmail(), user.getRole().name());
         return AuthResponseDTO.of(token, toResponseDTO(user));
     }
@@ -108,6 +116,46 @@ public class UserService {
         return toResponseDTO(userRepository.save(user));
     }
 
+    // ═══════════════ ADMIN ACTIONS ═══════════════
+
+    // Cambiar rol de un usuario
+    // Patrón RBAC (Role-Based Access Control):
+    // Los permisos se derivan del rol, no del usuario individual
+    @Transactional
+    public UserResponseDTO changeRole(Long userId, UserRole newRole) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario con id " + userId + " no encontrado"));
+        log.info("Cambiando rol de usuario {} de {} a {}", userId, user.getRole(), newRole);
+        user.setRole(newRole);
+        return toResponseDTO(userRepository.save(user));
+    }
+
+    // Ban/Unban de un usuario (Soft Delete pattern)
+    // No eliminamos el usuario, solo lo desactivamos
+    // Esto preserva la integridad referencial con sus reportes
+    @Transactional
+    public UserResponseDTO toggleBan(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario con id " + userId + " no encontrado"));
+        boolean newStatus = !Boolean.TRUE.equals(user.getActive());
+        user.setActive(newStatus);
+        log.info("Usuario {} {}", userId, newStatus ? "desbaneado" : "baneado");
+        return toResponseDTO(userRepository.save(user));
+    }
+
+    // Eliminar usuario (Hard Delete)
+    // ¿Cuándo usar Hard vs Soft Delete?
+    // - Soft Delete (ban): preserva historial, reversible
+    // - Hard Delete: cuando el usuario lo solicita (GDPR/ley de datos)
+    @Transactional
+    public void deleteUser(Long userId) {
+        if (!userRepository.existsById(userId)) {
+            throw new ResourceNotFoundException("Usuario con id " + userId + " no encontrado");
+        }
+        log.warn("Eliminando usuario {} permanentemente", userId);
+        userRepository.deleteById(userId);
+    }
+
     // Helper: convierte entidad a DTO
     private UserResponseDTO toResponseDTO(User user) {
         return UserResponseDTO.builder()
@@ -117,6 +165,7 @@ public class UserService {
                 .cedula(user.getCedula())
                 .role(user.getRole())
                 .trustLevel(user.getTrustLevel())
+                .active(user.getActive())
                 .createdAt(user.getCreatedAt())
                 .build();
     }

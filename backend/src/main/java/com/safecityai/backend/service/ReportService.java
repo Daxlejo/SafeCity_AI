@@ -20,6 +20,7 @@ public class ReportService {
 
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
+    private final IAClassificationService iaClassificationService;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto) {
@@ -31,6 +32,12 @@ public class ReportService {
 
         // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
         notificationService.notifyNewReport(response);
+
+        // ═══════════════ IA: CLASIFICAR EN BACKGROUND (ASYNC) ═══════════════
+        // classifyAsync() corre en otro hilo (Thread Pool "iaExecutor")
+        // El usuario recibe respuesta INMEDIATA, la IA trabaja en background
+        // Si falla, el reporte queda PENDING para revisión manual
+        iaClassificationService.classifyAsync(savedReport.getId());
 
         log.info("Reporte creado exitosamente con ID: {}", savedReport.getId());
         return response;
@@ -147,6 +154,7 @@ public class ReportService {
                 .longitude(report.getLongitude())
                 .photoUrl(report.getPhotoUrl())
                 .trustScore(report.getTrustScore())
+                .aiAnalysis(report.getAiAnalysis())
                 .zoneId(report.getZoneId())
                 .reportDate(report.getReportDate())
                 .build();

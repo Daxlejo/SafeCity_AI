@@ -1,5 +1,6 @@
 package com.safecityai.backend.service;
 
+import com.safecityai.backend.dto.DangerousZoneDTO;
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
@@ -111,6 +112,81 @@ public class StatsService {
                         .reportDate(r.getReportDate())
                         .build())
                 .collect(Collectors.toList());
+    }
+    // ═══════════════════════════════════════════════════════════════
+    // RANKING DE ZONAS PELIGROSAS SEMANAL
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // ¿Cómo agrupamos reportes por "zona" sin tener zonas definidas?
+    // ────────────────────────────────────────────────────────────────
+    // Usamos Geographic Grid Clustering:
+    // 1. Redondeamos lat/lng a 2 decimales (≈1.1km de área)
+    // 2. Los reportes con la misma lat/lng redondeada están en la misma "celda"
+    // 3. Contamos incidentes por celda
+    // 4. Rankeamos de mayor a menor
+    //
+    // Esto es un algoritmo O(n) — mucho más eficiente que comparar
+    // distancias entre todos los pares de reportes O(n²)
+    //
+    public List<DangerousZoneDTO> getDangerousZones(int days, int limit) {
+        java.time.LocalDateTime since = java.time.LocalDateTime.now().minusDays(days);
+        List<Report> recentReports = reportRepository.findRecentWithCoordinates(since);
+
+        // Agrupar por "celda" geográfica (lat/lng redondeado a 2 decimales)
+        java.util.Map<String, List<Report>> grid = new java.util.HashMap<>();
+        for (Report r : recentReports) {
+            if (r.getLatitude() == null || r.getLongitude() == null) continue;
+            // Redondear a 2 decimales ≈ celdas de ~1km
+            String key = String.format("%.2f,%.2f", r.getLatitude(), r.getLongitude());
+            grid.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(r);
+        }
+
+        // Construir ranking
+        List<DangerousZoneDTO> ranking = new java.util.ArrayList<>();
+        for (var entry : grid.entrySet()) {
+            List<Report> cellReports = entry.getValue();
+            long count = cellReports.size();
+
+            // Encontrar el tipo más común en esta celda
+            String mostCommon = cellReports.stream()
+                    .collect(Collectors.groupingBy(
+                            r -> r.getIncidentType().name(),
+                            Collectors.counting()))
+                    .entrySet().stream()
+                    .max(java.util.Map.Entry.comparingByValue())
+                    .map(java.util.Map.Entry::getKey)
+                    .orElse("OTHER");
+
+            // Nivel de riesgo según cantidad de incidentes
+            String risk;
+            if (count >= 5) risk = "HIGH";
+            else if (count >= 3) risk = "MEDIUM";
+            else risk = "LOW";
+
+            String[] coords = entry.getKey().split(",");
+            String areaName = String.format("Zona %.2f, %.2f",
+                    Double.parseDouble(coords[0]), Double.parseDouble(coords[1]));
+
+            ranking.add(DangerousZoneDTO.builder()
+                    .areaName(areaName)
+                    .incidentCount(count)
+                    .mostCommonType(mostCommon)
+                    .riskLevel(risk)
+                    .build());
+        }
+
+        // Ordenar por cantidad de incidentes (descendente)
+        ranking.sort((a, b) -> Long.compare(b.getIncidentCount(), a.getIncidentCount()));
+
+        // Asignar posición en ranking y limitar resultados
+        List<DangerousZoneDTO> topN = ranking.stream()
+                .limit(limit)
+                .collect(Collectors.toList());
+        for (int i = 0; i < topN.size(); i++) {
+            topN.get(i).setRank(i + 1);
+        }
+
+        return topN;
     }
 }
 

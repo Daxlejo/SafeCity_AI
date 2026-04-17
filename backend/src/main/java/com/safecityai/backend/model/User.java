@@ -40,10 +40,15 @@ public class User {
     @Column(nullable = false)
     private UserRole role = UserRole.CITIZEN;
 
-    // Nivel de confianza del usuario (0-100) — afecta el Trust Score de sus reportes
     @Builder.Default
     @Column(name = "trust_level")
     private Double trustLevel = 50.0;
+
+    // Soft Delete: en vez de eliminar, desactivamos al usuario
+    // Esto preserva el historial de reportes asociados
+    @Builder.Default
+    @Column(nullable = false)
+    private Boolean active = true;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

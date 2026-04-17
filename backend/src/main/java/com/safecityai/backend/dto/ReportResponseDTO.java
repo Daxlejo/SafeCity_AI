@@ -56,6 +56,9 @@ public class ReportResponseDTO {
 
     private Double trustScore;
 
+    // Razonamiento de la IA (por qué clasificó así)
+    private String aiAnalysis;
+
     /**
      * Fecha de creación del reporte.
      * Corresponde al campo reportDate de la entidad, que usa @CreationTimestamp.
