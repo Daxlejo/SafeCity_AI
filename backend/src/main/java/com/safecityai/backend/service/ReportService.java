@@ -55,6 +55,14 @@ public class ReportService {
                 .map(this::convertToDTO);
     }
 
+    @Transactional(readOnly = true)
+    public Page<ReportResponseDTO> getVerifiedReports(Pageable pageable) {
+        log.debug("Listando reportes verificados - página: {}, tamaño: {}",
+                pageable.getPageNumber(), pageable.getPageSize());
+        return reportRepository.findByStatus(ReportStatus.VERIFIED, pageable)
+                .map(this::convertToDTO);
+    }
+
     // Actualización null-safe: solo modifica campos que el cliente envió
     @Transactional
     public ReportResponseDTO updateReport(Long id, ReportCreateDTO dto) {

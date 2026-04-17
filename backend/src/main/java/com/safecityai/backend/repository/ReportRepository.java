@@ -22,6 +22,9 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     // Conteo por status
     long countByStatus(ReportStatus status);
 
+    // Listar por status (paginado)
+    org.springframework.data.domain.Page<Report> findByStatus(ReportStatus status, org.springframework.data.domain.Pageable pageable);
+
     // Reportes con coordenadas → para heatmap
     @Query("SELECT r FROM Report r WHERE r.latitude IS NOT NULL AND r.longitude IS NOT NULL")
     List<Report> findAllWithCoordinates();
@@ -30,4 +33,13 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     @Query("SELECT r FROM Report r WHERE r.latitude BETWEEN :minLat AND :maxLat " +
            "AND r.longitude BETWEEN :minLng AND :maxLng ORDER BY r.reportDate DESC")
     List<Report> findByArea(double minLat, double maxLat, double minLng, double maxLng);
+
+    // Encuentra reportes recientes del mismo tipo (para TrustScoreService)
+    @Query("SELECT r FROM Report r WHERE r.incidentType = :type " +
+           "AND r.reportDate >= :since AND r.id != :excludeId " +
+           "AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL")
+    List<Report> findSimilarRecentReports(
+            @org.springframework.data.repository.query.Param("type") com.safecityai.backend.model.enums.IncidentType type, 
+            @org.springframework.data.repository.query.Param("since") java.time.LocalDateTime since, 
+            @org.springframework.data.repository.query.Param("excludeId") Long excludeId);
 }

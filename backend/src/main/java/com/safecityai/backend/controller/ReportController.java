@@ -51,6 +51,21 @@ public class ReportController {
         return ResponseEntity.ok(reports);
     }
 
+    // GET /api/v1/reports/verified → solo reportes verificados
+    @GetMapping("/verified")
+    public ResponseEntity<Page<ReportResponseDTO>> getVerifiedReports(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "reportDate") String sort,
+            @RequestParam(defaultValue = "DESC") String direction) {
+
+        Sort.Direction sortDirection = Sort.Direction.fromString(direction);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sort));
+
+        Page<ReportResponseDTO> reports = reportService.getVerifiedReports(pageable);
+        return ResponseEntity.ok(reports);
+    }
+
     // PUT /api/v1/reports/{id} → 200 OK | 404 Not Found
     @PutMapping("/{id}")
     public ResponseEntity<ReportResponseDTO> updateReport(

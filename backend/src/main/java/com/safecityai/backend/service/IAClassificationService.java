@@ -46,7 +46,8 @@ public class IAClassificationService {
 
     public IAClassificationDTO classifyReport(Long reportId) {
         Report report = reportRepository.findById(reportId)
-                .orElseThrow(() -> new RuntimeException("Reporte no encontrado"));
+                .orElseThrow(() -> new com.safecityai.backend.exception.ResourceNotFoundException("Reporte", "id",
+                        reportId));
 
         IAClassificationDTO result;
 
@@ -78,7 +79,8 @@ public class IAClassificationService {
 
     private String buildPrompt(Report report) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("Eres un experto en seguridad ciudadana y analisis de incidentes en Colombia. ");
+        prompt.append(
+                "Eres un experto en seguridad ciudadana y analisis de incidentes en la ciudad de San Juan de Pasto, Colombia. ");
         prompt.append(
                 "Analiza el siguiente reporte ciudadano y devuelve UNICAMENTE un JSON valido (sin markdown, sin explicaciones, solo el JSON).\n\n");
 
@@ -101,7 +103,8 @@ public class IAClassificationService {
         prompt.append("}\n\n");
 
         prompt.append("REGLAS de puntuación:\n");
-        prompt.append("- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
+        prompt.append(
+                "- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
         prompt.append("- Descripcion detallada y coherente: +20 a +30 puntos\n");
         prompt.append("- Tiene coordenadas GPS: +15 puntos\n");
         prompt.append("- Tiene foto adjunta: +20 puntos\n");
@@ -211,58 +214,84 @@ public class IAClassificationService {
     }
 
     private double calculateTrustScore(Report report) {
-        double score = 30.0;
+        double score = 0.0;
 
-        String desc = report.getDescription();
-        if (desc != null) {
-            if (desc.length() > 100)
-                score += 25;
-            else if (desc.length() > 50)
-                score += 15;
-            else if (desc.length() > 20)
-                score += 5;
-        }
-
-        if (report.getLatitude() != null && report.getLongitude() != null) {
-            score += 20;
-        }
-        if (report.getAddress() != null && !report.getAddress().isBlank()) {
-            score += 10;
-        }
+        // 1. Base por fuente (CITIZEN_TEXT=50, INSTITUTIONAL=80, SOCIAL_MEDIA=60, default=30)
         if (report.getSource() != null) {
             switch (report.getSource()) {
-                case CITIZEN_TEXT -> score += 15;
-                case CITIZEN_VOICE -> score += 15;
-                case INSTITUTIONAL -> score += 10;
-                case SOCIAL_MEDIA -> score += 5;
+                case CITIZEN_TEXT, CITIZEN_VOICE -> score = 50.0;
+                case INSTITUTIONAL -> score = 80.0;
+                case SOCIAL_MEDIA -> score = 60.0;
+                default -> score = 30.0;
             }
-        }
-        if (report.getPhotoUrl() != null && !report.getPhotoUrl().isBlank()) {
-            score += 25;
+        } else {
+            score = 30.0;
         }
 
+        // 2. Bonus de +15 si el usuario tiene trustLevel > 70
+        if (report.getReportedBy() != null && report.getReportedBy().getTrustLevel() != null) {
+            if (report.getReportedBy().getTrustLevel() > 70.0) {
+                score += 15.0;
+            }
+        }
+
+        // 3. Bonus de +10 por cada reporte similar cercano (< 500m, < 2h)
+        if (report.getLatitude() != null && report.getLongitude() != null && report.getIncidentType() != null) {
+            java.time.LocalDateTime since = (report.getReportDate() != null ? report.getReportDate() : java.time.LocalDateTime.now()).minusHours(2);
+            Long excludeId = report.getId() != null ? report.getId() : -1L;
+            List<Report> recentReports = reportRepository.findSimilarRecentReports(report.getIncidentType(), since, excludeId);
+            
+            int nearbyCount = 0;
+            for (Report r : recentReports) {
+                double distance = calculateHaversineDistance(report.getLatitude(), report.getLongitude(), r.getLatitude(), r.getLongitude());
+                if (distance <= 0.5) { // 500 metros = 0.5 km
+                    nearbyCount++;
+                }
+            }
+            score += (nearbyCount * 10.0);
+        }
+
+        // Cap en 100
         return Math.min(score, 100.0);
     }
 
-    private IncidentType detectIncidentType(String description) {
+    private double calculateHaversineDistance(double lat1, double lon1, double lat2, double lon2) {
+        final int R = 6371; // Radio de la tierra en km
+        double latDistance = Math.toRadians(lat2 - lat1);
+        double lonDistance = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c; // Distancia en km
+    }
+
+    public IncidentType detectIncidentType(String description) {
         if (description == null)
             return IncidentType.OTHER;
         String lower = description.toLowerCase();
 
-        if (lower.contains("robo") || lower.contains("atraco") || lower.contains("hurto")) {
-            return IncidentType.ROBBERY;
-        }
-        if (lower.contains("accidente") || lower.contains("choque") || lower.contains("colision")) {
-            return IncidentType.ACCIDENT;
-        }
-        if (lower.contains("trafico") || lower.contains("embotellamiento") || lower.contains("via")) {
-            return IncidentType.TRAFFIC;
-        }
-        if (lower.contains("transporte") || lower.contains("bus") || lower.contains("ruta")) {
-            return IncidentType.TRANSIT_OP;
-        }
+        // Análisis riguroso por Keywords según especificación actual
+        if (lower.matches(".*\\b(robo|asalto|hurto)\\b.*")) return IncidentType.ROBBERY;
+        if (lower.matches(".*\\b(choque|accidente|colision)\\b.*")) return IncidentType.ACCIDENT;
+        if (lower.matches(".*\\b(trafico|embotellamiento|via)\\b.*")) return IncidentType.TRAFFIC;
+        if (lower.matches(".*\\b(transporte|bus|ruta)\\b.*")) return IncidentType.TRANSIT_OP;
 
         return IncidentType.OTHER;
+    }
+
+    // Exponer el suggestType público
+    public IncidentType suggestType(String description) {
+        return detectIncidentType(description);
+    }
+
+    public Map<String, List<String>> getKeywords() {
+        return Map.of(
+            "ROBBERY", List.of("robo", "asalto", "hurto"),
+            "ACCIDENT", List.of("choque", "accidente", "colision"),
+            "TRAFFIC", List.of("trafico", "embotellamiento", "via"),
+            "TRANSIT_OP", List.of("transporte", "bus", "ruta")
+        );
     }
 
     private TrustLevel scoreToLevel(double score) {

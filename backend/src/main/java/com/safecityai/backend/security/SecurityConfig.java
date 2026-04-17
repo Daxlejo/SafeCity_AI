@@ -45,6 +45,10 @@ public class SecurityConfig {
                         // Zonas: GET publico, POST/PUT/DELETE solo para ADMIN
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
                         .requestMatchers("/api/v1/zones/**").hasRole("ADMIN")
+                        
+                        // Admin: Panel, Usuarios, y Verificación de Reportes
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        
                         // Stats: GET publico (para mapa y dashboard)
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").permitAll()
 
