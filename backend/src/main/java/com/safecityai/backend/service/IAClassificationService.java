@@ -121,43 +121,53 @@ public class IAClassificationService {
             // 3. Guardar el análisis textual de la IA
             report.setAiAnalysis(result.getReasoning());
 
-            // 4. AUTO-VERIFICAR basado en el trustScore
-            //    - Score >= 50 → VERIFIED (la IA confía en el reporte)
-            //    - Score < 50  → sigue PENDING (un admin debe revisar)
-            //    Nunca auto-RECHAZAMOS — eso es decisión humana
+            // 4. AUTO-VERIFICAR o AUTO-ELIMINAR basado en el trustScore
             if (result.getTrustScore() >= 50.0) {
                 report.setStatus(ReportStatus.VERIFIED);
                 log.info("[IA-Async] Reporte {} auto-verificado (score: {})",
                         reportId, result.getTrustScore());
+                reportRepository.save(report);
+                
+                // Notificar al frontend via WebSocket que el reporte fue actualizado
+                ReportResponseDTO dto = convertToDTO(report);
+                notificationService.notifyReportUpdated(dto);
+
+            } else if (result.getTrustScore() == 0.0) {
+                // ELIMINAR COMPLETAMENTE LOS REPORTES BASURA
+                log.info("[IA-Async] Reporte {} ELIMINADO por ser basura (score: 0.0)", reportId);
+                reportRepository.delete(report);
+                notificationService.notifyReportDeleted(reportId);
+
             } else {
+                report.setStatus(ReportStatus.PENDING);
                 log.info("[IA-Async] Reporte {} queda PENDING para revisión manual (score: {})",
                         reportId, result.getTrustScore());
+                reportRepository.save(report);
+                
+                ReportResponseDTO dto = convertToDTO(report);
+                notificationService.notifyReportUpdated(dto);
             }
-
-            reportRepository.save(report);
-
-            // 5. Notificar al frontend via WebSocket que el reporte fue actualizado
-            ReportResponseDTO dto = ReportResponseDTO.builder()
-                    .id(report.getId())
-                    .description(report.getDescription())
-                    .incidentType(report.getIncidentType())
-                    .address(report.getAddress())
-                    .status(report.getStatus())
-                    .source(report.getSource())
-                    .latitude(report.getLatitude())
-                    .longitude(report.getLongitude())
-                    .trustScore(report.getTrustScore())
-                    .aiAnalysis(report.getAiAnalysis())
-                    .reportDate(report.getReportDate())
-                    .build();
-            notificationService.notifyReportUpdated(dto);
 
         } catch (Exception e) {
             log.error("[IA-Async] Error clasificando reporte {}: {}",
                     reportId, e.getMessage(), e);
-            // NO relanzamos — el reporte sigue como PENDING
-            // Un admin puede clasificarlo manualmente
         }
+    }
+
+    private ReportResponseDTO convertToDTO(Report report) {
+        return ReportResponseDTO.builder()
+                .id(report.getId())
+                .description(report.getDescription())
+                .incidentType(report.getIncidentType())
+                .address(report.getAddress())
+                .status(report.getStatus())
+                .source(report.getSource())
+                .latitude(report.getLatitude())
+                .longitude(report.getLongitude())
+                .trustScore(report.getTrustScore())
+                .aiAnalysis(report.getAiAnalysis())
+                .reportDate(report.getReportDate())
+                .build();
     }
 
     // ═══════════════════════════════════════════════════════════════
