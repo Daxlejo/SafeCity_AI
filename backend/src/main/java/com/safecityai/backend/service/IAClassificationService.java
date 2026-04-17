@@ -1,15 +1,20 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.IAClassificationDTO;
+import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.IncidentType;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.safecityai.backend.repository.ReportRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
@@ -21,21 +26,25 @@ import java.util.Map;
  * 1. Intenta clasificar con Gemini
  * 2. Si Gemini falla → usa heuristica (reglas fijas) como respaldo
  */
+@Slf4j
 @Service
 public class IAClassificationService {
 
     private final ReportRepository reportRepository;
+    private final NotificationService notificationService;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
     @Value("${app.gemini.api-key}")
     private String geminiApiKey;
 
-    @Value("${app.gemini.model:gemini-1.5-flash}")
+    @Value("${app.gemini.model:gemini-2.0-flash}")
     private String geminiModel;
 
-    public IAClassificationService(ReportRepository reportRepository) {
+    public IAClassificationService(ReportRepository reportRepository,
+                                   NotificationService notificationService) {
         this.reportRepository = reportRepository;
+        this.notificationService = notificationService;
         this.restTemplate = new RestTemplate();
         this.objectMapper = new ObjectMapper();
     }
@@ -64,6 +73,86 @@ public class IAClassificationService {
         reportRepository.save(report);
 
         return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MÉTODO @Async — Se ejecuta en un HILO SEPARADO (background)
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // ¿Cómo funciona @Async?
+    // ─────────────────────────
+    // 1. ReportService.createReport() llama classifyAsync(id)
+    // 2. Spring intercepta la llamada y la pone en la cola del
+    //    ThreadPool "iaExecutor" (definido en AsyncConfig)
+    // 3. createReport() retorna INMEDIATAMENTE al usuario → no espera
+    // 4. Cuando hay un hilo libre en el pool, ejecuta este método
+    // 5. Si Gemini tarda 5 seg, el usuario NO se entera
+    //
+    // REGLA IMPORTANTE de @Async:
+    // El método @Async DEBE ser llamado desde OTRA clase.
+    // Si llamas this.classifyAsync() desde DENTRO de esta clase,
+    // Spring NO lo intercepta y se ejecuta SINCRÓNICAMENTE.
+    // Por eso ReportService (otra clase) es quien lo llama.
+    //
+    // @Transactional: necesitamos nuestra propia transacción
+    // porque la transacción de createReport() ya terminó.
+    //
+    @Async("iaExecutor")  // ← Usa el ThreadPool que configuramos
+    @Transactional
+    public void classifyAsync(Long reportId) {
+        log.info("[IA-Async] Iniciando clasificación del reporte ID: {}", reportId);
+
+        try {
+            // 1. Clasificar (reutiliza toda la lógica existente)
+            IAClassificationDTO result = classifyReport(reportId);
+
+            // 2. Buscar el reporte FRESCO de BD (nueva transacción)
+            Report report = reportRepository.findById(reportId).orElse(null);
+            if (report == null) {
+                log.warn("[IA-Async] Reporte {} no encontrado, posiblemente eliminado", reportId);
+                return;
+            }
+
+            // 3. Guardar el análisis textual de la IA
+            report.setAiAnalysis(result.getReasoning());
+
+            // 4. AUTO-VERIFICAR basado en el trustScore
+            //    - Score >= 50 → VERIFIED (la IA confía en el reporte)
+            //    - Score < 50  → sigue PENDING (un admin debe revisar)
+            //    Nunca auto-RECHAZAMOS — eso es decisión humana
+            if (result.getTrustScore() >= 50.0) {
+                report.setStatus(ReportStatus.VERIFIED);
+                log.info("[IA-Async] Reporte {} auto-verificado (score: {})",
+                        reportId, result.getTrustScore());
+            } else {
+                log.info("[IA-Async] Reporte {} queda PENDING para revisión manual (score: {})",
+                        reportId, result.getTrustScore());
+            }
+
+            reportRepository.save(report);
+
+            // 5. Notificar al frontend via WebSocket que el reporte fue actualizado
+            ReportResponseDTO dto = ReportResponseDTO.builder()
+                    .id(report.getId())
+                    .description(report.getDescription())
+                    .incidentType(report.getIncidentType())
+                    .address(report.getAddress())
+                    .status(report.getStatus())
+                    .source(report.getSource())
+                    .latitude(report.getLatitude())
+                    .longitude(report.getLongitude())
+                    .trustScore(report.getTrustScore())
+                    .aiAnalysis(report.getAiAnalysis())
+                    .reportDate(report.getReportDate())
+                    .build();
+            notificationService.notifyReportUpdated(dto);
+
+        } catch (Exception e) {
+            log.error("[IA-Async] Error clasificando reporte {}: {}",
+                    reportId, e.getMessage(), e);
+            // NO relanzamos — el reporte sigue como PENDING
+            // Un admin puede clasificarlo manualmente
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════

@@ -20,5 +20,6 @@ public class UserResponseDTO {
     private String cedula;
     private UserRole role;
     private Double trustLevel;
+    private Boolean active;
     private LocalDateTime createdAt;
 }
