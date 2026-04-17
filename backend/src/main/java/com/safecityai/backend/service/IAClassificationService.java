@@ -23,8 +23,8 @@ import java.util.Map;
 /**
  * Motor de IA para clasificar reportes y calcular trust score.
  * Flujo:
- * 1. Intenta clasificar con Gemini
- * 2. Si Gemini falla → usa heuristica (reglas fijas) como respaldo
+ * 1. Intenta clasificar con OpenRouter (Gemma 3 12B, gratis)
+ * 2. Si OpenRouter falla → usa heuristica (reglas fijas) como respaldo
  */
 @Slf4j
 @Service
@@ -35,11 +35,11 @@ public class IAClassificationService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.gemini.api-key}")
-    private String geminiApiKey;
+    @Value("${app.openrouter.api-key}")
+    private String openRouterApiKey;
 
-    @Value("${app.gemini.model:gemini-2.0-flash}")
-    private String geminiModel;
+    @Value("${app.openrouter.model:google/gemma-3-12b-it:free}")
+    private String openRouterModel;
 
     public IAClassificationService(ReportRepository reportRepository,
                                    NotificationService notificationService) {
@@ -60,14 +60,13 @@ public class IAClassificationService {
         IAClassificationDTO result;
 
         try {
-            // FASE 2: Intentar con Gemini
-            result = classifyWithGemini(report);
-            log.info("[IA] Reporte {} clasificado con GEMINI (score: {})",
+            // Intentar con OpenRouter (Gemma 3 12B gratis)
+            result = classifyWithAI(report);
+            log.info("[IA] Reporte {} clasificado con OpenRouter/Gemma (score: {})",
                     reportId, result.getTrustScore());
         } catch (Exception e) {
-            // FALLBACK: Si Gemini falla, usar heuristica
-            // Logueamos el error REAL para diagnosticar por qué Gemini no funciona
-            log.warn("[IA] Gemini falló para reporte {}. Razón: {}. Usando heurística.",
+            // FALLBACK: Si OpenRouter falla, usar heuristica
+            log.warn("[IA] OpenRouter falló para reporte {}. Razón: {}. Usando heurística.",
                     reportId, e.getMessage());
             result = classifyWithHeuristics(report);
             result.setReasoning("[Fallback heuristico] " + result.getReasoning());
@@ -171,13 +170,22 @@ public class IAClassificationService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // FASE 2: Clasificacion con Gemini
+    // CLASIFICACIÓN CON IA REAL (OpenRouter — Gemma 3 12B)
     // ═══════════════════════════════════════════════════════════════
+    //
+    // OpenRouter es un servicio que da acceso GRATIS a modelos de IA
+    // como Google Gemma 3 12B (12 mil millones de parámetros).
+    //
+    // API compatible con OpenAI → usa /chat/completions
+    // Diferencia clave vs Gemini:
+    //   - Gemini:     POST .../generateContent  + body { contents: [...] }
+    //   - OpenRouter:  POST .../chat/completions + body { messages: [...] }
+    //
 
-    private IAClassificationDTO classifyWithGemini(Report report) {
+    private IAClassificationDTO classifyWithAI(Report report) {
         String prompt = buildPrompt(report);
-        String geminiResponse = callGeminiAPI(prompt);
-        return parseGeminiResponse(geminiResponse, report.getId());
+        String aiResponse = callOpenRouterAPI(prompt);
+        return parseOpenRouterResponse(aiResponse, report.getId());
     }
 
     private String buildPrompt(Report report) {
@@ -218,25 +226,24 @@ public class IAClassificationService {
     }
 
     /**
-     * Hace la peticion HTTP a la API de Google Gemini.
-     * Endpoint: POST /v1beta/models/{model}:generateContent
+     * Hace la petición HTTP a OpenRouter (API compatible con OpenAI).
+     * Endpoint: POST https://openrouter.ai/api/v1/chat/completions
      */
-    private String callGeminiAPI(String prompt) {
-        String url = String.format(
-                "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-                geminiModel, geminiApiKey);
+    private String callOpenRouterAPI(String prompt) {
+        String url = "https://openrouter.ai/api/v1/chat/completions";
 
-        // Construir el body que Gemini espera
         Map<String, Object> body = Map.of(
-                "contents", List.of(
-                        Map.of("parts", List.of(
-                                Map.of("text", prompt)))),
-                "generationConfig", Map.of(
-                        "temperature", 0.3,
-                        "maxOutputTokens", 500));
+                "model", openRouterModel,
+                "messages", List.of(
+                        Map.of("role", "user", "content", prompt)),
+                "temperature", 0.3,
+                "max_tokens", 500);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(openRouterApiKey);
+        headers.set("HTTP-Referer", "https://safecityai.onrender.com");
+        headers.set("X-Title", "SafeCity AI");
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
@@ -247,21 +254,18 @@ public class IAClassificationService {
     }
 
     /**
-     * Parsea la respuesta de Gemini y extrae el JSON con la clasificacion.
-     * La respuesta de Gemini viene asi:
-     * { "candidates": [{ "content": { "parts": [{ "text": "{ trustScore: 75 ... }"
-     * }] } }] }
+     * Parsea la respuesta de OpenRouter (formato OpenAI).
+     * Estructura: { "choices": [{ "message": { "content": "{ JSON }" } }] }
      */
-    private IAClassificationDTO parseGeminiResponse(String responseBody, Long reportId) {
+    private IAClassificationDTO parseOpenRouterResponse(String responseBody, Long reportId) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            String generatedText = root
-                    .path("candidates").get(0)
-                    .path("content")
-                    .path("parts").get(0)
-                    .path("text").asText();
 
-            // Limpia el texto
+            String generatedText = root
+                    .path("choices").get(0)
+                    .path("message")
+                    .path("content").asText();
+
             generatedText = generatedText
                     .replace("```json", "")
                     .replace("```", "")
@@ -274,7 +278,6 @@ public class IAClassificationService {
             String reasoning = classification.path("reasoning").asText("Sin razonamiento disponible");
             boolean shouldVerify = classification.path("shouldVerify").asBoolean(true);
 
-            // Convertir el tipo sugerido
             IncidentType suggestedType;
             try {
                 suggestedType = IncidentType.valueOf(suggestedTypeStr);
@@ -287,12 +290,12 @@ public class IAClassificationService {
                     .trustScore(trustScore)
                     .trustLevel(scoreToLevel(trustScore))
                     .suggestedType(suggestedType)
-                    .reasoning("[Gemini AI] " + reasoning)
+                    .reasoning("[IA OpenRouter] " + reasoning)
                     .shouldVerify(shouldVerify)
                     .build();
 
         } catch (Exception e) {
-            throw new RuntimeException("Error parseando respuesta de Gemini: " + e.getMessage(), e);
+            throw new RuntimeException("Error parseando respuesta de OpenRouter: " + e.getMessage(), e);
         }
     }
 
