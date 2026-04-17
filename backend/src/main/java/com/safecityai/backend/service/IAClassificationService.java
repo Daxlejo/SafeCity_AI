@@ -38,7 +38,7 @@ public class IAClassificationService {
     @Value("${app.openrouter.api-key}")
     private String openRouterApiKey;
 
-    @Value("${app.openrouter.model:google/gemma-3-12b-it:free}")
+    @Value("${app.openrouter.model:openai/gpt-oss-120b:free}")
     private String openRouterModel;
 
     public IAClassificationService(ReportRepository reportRepository,
@@ -234,7 +234,7 @@ public class IAClassificationService {
      * 3. Si sigue fallando → prueba con modelo alternativo (Llama 3.2 3B)
      * 4. Si todo falla → lanza excepción → cae a la heurística
      */
-    private static final String FALLBACK_MODEL = "meta-llama/llama-3.2-3b-instruct:free";
+    private static final String FALLBACK_MODEL = "google/gemma-3-12b-it:free";
     private static final int RETRY_DELAY_MS = 3000;
 
     private String callOpenRouterAPI(String prompt) {
