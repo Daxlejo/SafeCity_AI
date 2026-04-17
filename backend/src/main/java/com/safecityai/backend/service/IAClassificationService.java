@@ -214,6 +214,7 @@ public class IAClassificationService {
 
         prompt.append("REGLAS de puntuación:\n");
         prompt.append("- REGLA CRÍTICA DE GIBBERISH: Si la descripción contiene texto sin sentido, caracteres aleatorios, palabras inventadas, o NO describe un incidente real y específico, el trustScore DEBE SER 0. Ejemplos de gibberish: 'asdfgh', 'jjjjjj', 'hola hola hola', 'test123'.\n");
+        prompt.append("- REGLA DE INCIDENTE FALSO/BROMA: Si el reporte resulta ser una broma, menciona armas de juguete (cuchillo de plástico, pistola de agua), seres de ficción (aliens, superhéroes) o situaciones cómicas e improbables, el trustScore DEBE SER EXACTAMENTE 0.\n");
         prompt.append("- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
         prompt.append("- Descripcion detallada y coherente: +20 a +30 puntos\n");
         prompt.append("- Tiene coordenadas GPS: +15 puntos\n");
