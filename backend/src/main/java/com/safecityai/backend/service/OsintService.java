@@ -11,9 +11,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -52,29 +56,63 @@ public class OsintService {
                         "Nariño Noticias La Original",
                         "La Voz Del pueblo Noticias Nariño");
 
+        // ═══════════════════════════════════════════════════════════
+        // SCHEDULER: Escaneo automático cada hora
+        // ═══════════════════════════════════════════════════════════
+        // fixedRate = 3600000ms = 1 hora
+        // initialDelay = 60000ms = 1 minuto (esperar a que la app arranque)
+        // Se puede desactivar con app.osint.scheduler.enabled=false
+
+        @Value("${app.osint.scheduler.enabled:true}")
+        private boolean schedulerEnabled;
+
+        @Value("${app.osint.default-city:Pasto}")
+        private String defaultCity;
+
+        @Scheduled(fixedRate = 3600000, initialDelay = 60000)
+        public void scheduledScan() {
+                if (!schedulerEnabled) {
+                        log.debug("[OSINT] Scheduler desactivado, saltando scan");
+                        return;
+                }
+                log.info("[OSINT] Ejecutando scan automático para '{}'", defaultCity);
+                try {
+                        Map<String, Object> result = scanAndClassify(defaultCity);
+                        log.info("[OSINT] Scan automático completado: {}", result);
+                } catch (Exception e) {
+                        log.error("[OSINT] Error en scan automático: {}", e.getMessage());
+                }
+        }
+
         public Map<String, Object> scanAndClassify(String city) {
                 // Paso 1: Buscar en todas las fuentes
                 List<OsintResultDTO> osintResults = searchIncidents(city);
-                log.info("OSINT scan: {} resultados encontrados para '{}'", osintResults.size(), city);
+                log.info("[OSINT] scan: {} resultados encontrados para '{}'", osintResults.size(), city);
 
                 int created = 0;
-                int classified = 0;
+                int skippedDuplicates = 0;
                 List<Long> reportIds = new ArrayList<>();
 
                 // Paso 2 y 3: Por cada resultado, crear reporte y clasificar
                 for (OsintResultDTO osint : osintResults) {
                         try {
-                                // Filtro: No procesar incidentes viejos (mas de 7 dias)
+                                // Filtro 1: No procesar incidentes viejos (mas de 7 dias)
                                 if (osint.getPublishedAt() != null &&
                                                 osint.getPublishedAt().isBefore(LocalDateTime.now().minusDays(7))) {
-                                        log.info("Ignorando reporte viejo de OSINT (fecha: {})",
-                                                        osint.getPublishedAt());
+                                        continue;
+                                }
+
+                                // Filtro 2: DEDUPLICACIÓN — evitar reportes duplicados
+                                String contentHash = hashContent(osint.getContent());
+                                if (reportRepository.existsByDescriptionHash(contentHash)) {
+                                        skippedDuplicates++;
                                         continue;
                                 }
 
                                 // Crear el reporte en la BD
                                 Report report = Report.builder()
                                                 .description(osint.getContent())
+                                                .descriptionHash(contentHash)
                                                 .incidentType(IncidentType.OTHER)
                                                 .address(osint.getDetectedLocation())
                                                 .latitude(osint.getLatitude())
@@ -90,29 +128,22 @@ public class OsintService {
                                 created++;
                                 reportIds.add(saved.getId());
 
-                                // Clasificar con Gemini AI
-                                try {
-                                        iaService.classifyReport(saved.getId());
-                                        classified++;
-                                        log.info("Reporte OSINT #{} clasificado por IA", saved.getId());
-                                } catch (Exception e) {
-                                        log.warn("IA no pudo clasificar reporte #{}: {}",
-                                                        saved.getId(), e.getMessage());
-                                }
+                                // Clasificar con IA en BACKGROUND (no bloquea este hilo)
+                                iaService.classifyAsync(saved.getId());
 
                         } catch (Exception e) {
-                                log.warn("Error creando reporte OSINT: {}", e.getMessage());
+                                log.warn("[OSINT] Error creando reporte: {}", e.getMessage());
                         }
                 }
 
-                log.info("OSINT pipeline: {} creados, {} clasificados de {} encontrados",
-                                created, classified, osintResults.size());
+                log.info("[OSINT] pipeline: {} creados, {} duplicados ignorados de {} encontrados",
+                                created, skippedDuplicates, osintResults.size());
 
                 return Map.of(
                                 "city", city,
                                 "found", osintResults.size(),
                                 "reportsCreated", created,
-                                "reportsClassified", classified,
+                                "duplicatesSkipped", skippedDuplicates,
                                 "reportIds", reportIds);
         }
 
@@ -396,5 +427,22 @@ public class OsintService {
                                 || lower.contains("arma") || lower.contains("violencia")
                                 || lower.contains("emergencia") || lower.contains("incidente")
                                 || lower.contains("transito") || lower.contains("choque");
+        }
+
+        /**
+         * Genera un hash MD5 de la descripción para deduplicación.
+         * Normaliza el texto (lowercase, trim, colapsar espacios) antes de hashear.
+         */
+        private String hashContent(String content) {
+                if (content == null || content.isBlank()) return "";
+                try {
+                        String normalized = content.toLowerCase().trim().replaceAll("\\s+", " ");
+                        MessageDigest md = MessageDigest.getInstance("MD5");
+                        byte[] digest = md.digest(normalized.getBytes(StandardCharsets.UTF_8));
+                        return String.format("%032x", new BigInteger(1, digest));
+                } catch (Exception e) {
+                        // Fallback: usar hashCode si MD5 falla
+                        return String.valueOf(content.hashCode());
+                }
         }
 }

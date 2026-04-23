@@ -34,4 +34,7 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     // Reportes recientes (últimos N días) para ranking semanal
     @Query("SELECT r FROM Report r WHERE r.reportDate >= :since AND r.latitude IS NOT NULL")
     List<Report> findRecentWithCoordinates(java.time.LocalDateTime since);
+
+    // Deduplicación OSINT: verificar si ya existe un reporte con el mismo hash de descripción
+    boolean existsByDescriptionHash(String descriptionHash);
 }

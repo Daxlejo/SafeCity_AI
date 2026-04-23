@@ -4,6 +4,7 @@ import com.safecityai.backend.dto.ReportCreateDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
@@ -22,9 +23,10 @@ public class ReportService {
     private final NotificationService notificationService;
     private final IAClassificationService iaClassificationService;
     private final GeocodingService geocodingService;
+    private final UserService userService;
 
     @Transactional
-    public ReportResponseDTO createReport(ReportCreateDTO dto) {
+    public ReportResponseDTO createReport(ReportCreateDTO dto, String userEmail) {
         log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
 
         Report report = convertToEntity(dto);
@@ -39,6 +41,16 @@ public class ReportService {
                     report.getLatitude(), report.getLongitude());
             report.setAddress(address);
             log.info("Geocoding: ({}, {}) → {}", report.getLatitude(), report.getLongitude(), address);
+        }
+
+        // Vincular reporte al usuario autenticado
+        if (userEmail != null) {
+            try {
+                User user = userService.findByEmail(userEmail);
+                report.setReportedBy(user);
+            } catch (Exception e) {
+                log.warn("No se pudo vincular usuario {} al reporte: {}", userEmail, e.getMessage());
+            }
         }
 
         Report savedReport = reportRepository.save(report);
