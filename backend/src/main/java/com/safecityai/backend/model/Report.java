@@ -69,6 +69,10 @@ public class Report {
     @Column(name = "ai_analysis", length = 2000)
     private String aiAnalysis;
 
+    // Hash de la descripción para deduplicación OSINT
+    @Column(name = "description_hash")
+    private String descriptionHash;
+
     // Relacion: cada reporte pertenece a un usuario
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
