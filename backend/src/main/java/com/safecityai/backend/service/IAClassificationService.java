@@ -138,7 +138,7 @@ public class IAClassificationService {
             // 5. AUTO-VERIFICAR o AUTO-ELIMINAR basado en el trustScore
             User reportOwner = report.getReportedBy();
 
-            if (result.getTrustScore() >= 50.0) {
+            if (result.getTrustScore() >= 60.0) {
                 report.setStatus(ReportStatus.VERIFIED);
                 log.info("[IA-Async] Reporte {} auto-verificado (score: {})",
                         reportId, result.getTrustScore());
@@ -246,42 +246,48 @@ public class IAClassificationService {
 
     private String buildPrompt(Report report) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append(
-                "Eres un Analista de Veracidad y Clasificación de Incidentes para SafeCityAI en Pasto, Colombia. ");
-        prompt.append(
-                "Tu objetivo es filtrar reportes falsos y asegurar que la categoría del incidente sea la correcta.\n\n");
+        prompt.append("Eres un Analista de Veracidad y Clasificación de Incidentes para SafeCityAI en Pasto, Colombia. ");
+        prompt.append("Tu objetivo es determinar si un reporte es real y asignarle la categoría correcta.\n\n");
 
+        // Contexto del reporte
         prompt.append("=== DATOS DEL REPORTE ===\n");
-        prompt.append("- Descripción del usuario: \"").append(report.getDescription()).append("\"\n");
-        prompt.append("- Categoría marcada por usuario: ").append(report.getIncidentType()).append("\n");
-        prompt.append("- Coordenadas GPS: ").append(report.getLatitude() != null ? "DISPONIBLES" : "NO DISPONIBLES")
-                .append("\n");
-        prompt.append("- Evidencia Fotográfica: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n\n");
+        prompt.append("- Descripción: \"").append(report.getDescription()).append("\"\n");
+        prompt.append("- Categoría marcada: ").append(report.getIncidentType()).append("\n");
+        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ" : "NO").append("\n");
+        prompt.append("- Foto adjunta: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n");
 
-        prompt.append("=== TAREAS CRÍTICAS ===\n");
-        prompt.append(
-                "1. ANALIZAR COHERENCIA: Si el reporte describe situaciones imposibles (tanques de guerra, aliens, pistolas de agua, superhéroes), el trustScore es 0.\n");
-        prompt.append("2. VALIDAR CATEGORÍA: Revisa si la descripción coincide con la categoría marcada. ");
-        prompt.append(
-                "Si el usuario marcó 'TRAFFIC' pero describe un robo a mano armada, DEBES cambiar 'suggestedType' a 'ROBBERY'.\n");
-        prompt.append(
-                "Categorías permitidas para 'suggestedType': [ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER].\n\n");
+        // Reputación del usuario
+        if (report.getReportedBy() != null) {
+            Double userAvgScore = reportRepository.findAverageTrustScoreByUser(report.getReportedBy().getId());
+            if (userAvgScore != null) {
+                String repLabel = userAvgScore >= 70 ? "ALTA" : (userAvgScore >= 40 ? "MEDIA" : "BAJA");
+                prompt.append("- Reputación histórica del usuario: ").append(repLabel)
+                      .append(String.format(" (%.0f%% promedio en reportes anteriores verificados)\n", userAvgScore));
+            }
+        }
 
-        prompt.append("=== REGLAS DE PUNTUACIÓN (Puntaje base: 20 si es real) ===\n");
-        prompt.append("- Descripción detallada y seria: +30 pts.\n");
-        prompt.append("- Datos verificables (GPS/Foto): +30 pts.\n");
-        prompt.append("- Reporte vago o sospecha de broma: TrustScore = 0.\n");
-        prompt.append("- Si la descripción es puro texto aleatorio (gibberish): TrustScore = 0.\n\n");
+        prompt.append("\n=== TAREAS ===\n");
+        prompt.append("1. COHERENCIA: Si el reporte describe situaciones imposibles o es claramente una broma ");
+        prompt.append("(aliens, superhéroes, armas de fantasía, reportes tipo 'jaja'), trustScore = 0.\n");
+        prompt.append("2. CATEGORÍA: Si la descripción no coincide con la categoría marcada, corrige 'suggestedType'.\n");
+        prompt.append("   Categorías válidas: [ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER].\n\n");
 
-        prompt.append("=== FORMATO DE SALIDA (JSON ÚNICAMENTE) ===\n");
+        prompt.append("=== REGLAS DE PUNTUACIÓN ===\n");
+        prompt.append("- Reporte con descripción coherente y seria: puntaje base 50.\n");
+        prompt.append("- GPS proporcionado: +15 pts.\n");
+        prompt.append("- Descripción detallada (>80 caracteres): +15 pts.\n");
+        prompt.append("- Foto adjunta: +15 pts.\n");
+        prompt.append("- Usuario con reputación ALTA (>70%): +10 pts extra.\n");
+        prompt.append("- Descripción muy vaga (<20 caracteres) pero coherente: -15 pts.\n");
+        prompt.append("- Reporte falso, broma obvia o texto sin sentido: trustScore = 0.\n\n");
+
+        prompt.append("=== FORMATO DE RESPUESTA (JSON ÚNICAMENTE, SIN TEXTO ADICIONAL) ===\n");
         prompt.append("{\n");
         prompt.append("  \"trustScore\": <0-100>,\n");
-        prompt.append("  \"suggestedType\": \"<CATEGORIA_CORREGIDA>\",\n");
-        prompt.append("  \"reasoning\": \"<Explicación de la puntuación y si se cambió la categoría>\",\n");
-        prompt.append("  \"shouldVerify\": <true si score > 50>\n");
-        prompt.append("}\n\n");
-        prompt.append(
-                "INSTRUCCIÓN FINAL: Sé extremadamente escéptico. Si tienes la más mínima duda de que el reporte es una broma o una exageración irreal, inclínate siempre por un trustScore menor a 15 y shouldVerify: false. No permitas que el GPS o la Foto validen un texto que es claramente falso.");
+        prompt.append("  \"suggestedType\": \"<CATEGORIA_CORRECTA>\",\n");
+        prompt.append("  \"reasoning\": \"<Breve explicación en español>\",\n");
+        prompt.append("  \"shouldVerify\": <true si trustScore >= 60>\n");
+        prompt.append("}\n");
 
         return prompt.toString();
     }
@@ -424,43 +430,55 @@ public class IAClassificationService {
     private double calculateTrustScore(Report report) {
         String desc = report.getDescription();
 
-        // ═══ VALIDACIÓN ANTI-GIBBERISH ═══
-        // Si el texto es basura, retornamos 0 INMEDIATAMENTE
-        // No importa si tiene GPS, foto, etc. → texto sin sentido = score 0
+        // Si el texto es basura → score 0 inmediato
         if (desc == null || desc.isBlank() || isGibberish(desc)) {
             log.info("[Heuristica] Texto detectado como gibberish/vacío: '{}'",
                     desc != null ? desc.substring(0, Math.min(desc.length(), 30)) : "null");
             return 0.0;
         }
 
-        double score = 30.0;
+        // Puntaje base para cualquier reporte coherente
+        double score = 50.0;
 
+        // Longitud de la descripción
         if (desc.length() > 100)
-            score += 25;
-        else if (desc.length() > 50)
             score += 15;
-        else if (desc.length() > 20)
-            score += 5;
-
-        if (report.getLatitude() != null && report.getLongitude() != null) {
-            score += 20;
-        }
-        if (report.getAddress() != null && !report.getAddress().isBlank()) {
+        else if (desc.length() > 50)
             score += 10;
-        }
+        else if (desc.length() < 20)
+            score -= 15; // muy vaga
+
+        // GPS
+        if (report.getLatitude() != null && report.getLongitude() != null)
+            score += 15;
+
+        // Foto
+        if (report.getPhotoUrl() != null && !report.getPhotoUrl().isBlank())
+            score += 15;
+
+        // Fuente
         if (report.getSource() != null) {
             switch (report.getSource()) {
-                case CITIZEN_TEXT -> score += 15;
-                case CITIZEN_VOICE -> score += 15;
+                case CITIZEN_TEXT -> score += 5;
+                case CITIZEN_VOICE -> score += 5;
                 case INSTITUTIONAL -> score += 10;
-                case SOCIAL_MEDIA -> score += 5;
+                case SOCIAL_MEDIA -> { } // sin bonus
             }
         }
-        if (report.getPhotoUrl() != null && !report.getPhotoUrl().isBlank()) {
-            score += 25;
+
+        // ═══ REPUTACIÓN HISTÓRICA DEL USUARIO ═══
+        // Si el usuario tiene un buen historial, le damos más confianza
+        if (report.getReportedBy() != null) {
+            Double userAvgScore = reportRepository.findAverageTrustScoreByUser(report.getReportedBy().getId());
+            if (userAvgScore != null) {
+                if (userAvgScore >= 70)
+                    score += 10; // usuario confiable
+                else if (userAvgScore < 30)
+                    score -= 10; // usuario con historial pobre
+            }
         }
 
-        return Math.min(score, 100.0);
+        return Math.min(Math.max(score, 0.0), 100.0);
     }
 
     // ═══════════════════════════════════════════════════════════════
