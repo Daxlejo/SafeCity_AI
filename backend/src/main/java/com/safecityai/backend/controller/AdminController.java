@@ -26,6 +26,16 @@ public class AdminController {
         this.reportService = reportService;
     }
 
+    // GET /api/v1/admin/dashboard → info básica del sistema
+    @GetMapping("/dashboard")
+    public ResponseEntity<Map<String, Object>> getDashboard() {
+        return ResponseEntity.ok(Map.of(
+            "message", "SafeCity AI Admin Dashboard",
+            "version", "1.0.0-sprint9",
+            "status", "running"
+        ));
+    }
+
     // GET /api/v1/admin/users → listar todos los usuarios (paginado)
     @GetMapping("/users")
     public ResponseEntity<Page<UserResponseDTO>> getAllUsers(
