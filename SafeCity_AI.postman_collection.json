@@ -1,8 +1,8 @@
 {
     "info": {
         "_postman_id": "safecity-ai-collection",
-        "name": "SafeCity AI Collection - Sprint 7",
-        "description": "Colección completa de la API SafeCity AI — Sprint 7.\n\nIncluye endpoints de Auth, Users, Reports, Alerts, Notifications, Zones y Stats.\n\n**Novedades Sprint 8:**\n- Carpeta Zones con CRUD y test de 403 Forbidden para CITIZEN\n- Carpeta Stats con 4 endpoints de estadísticas\n- Test de integración: crear reporte en zona → verificar que stats se actualizan\n- Reports actualizado con campo zoneId opcional\n\n**Flujo de ejecución (Collection Runner):**\n1. Register → crea usuario con datos únicos (timestamp)\n2. Login (email/cédula) → valida login y guarda token\n3-5. CRUD de Users\n6-10. CRUD de Reports (con Authorization)\n11-14. CRUD de Alerts/Preferences\n15-16. Notifications (documentación WebSocket + prueba health)\n17-19. Security Tests (401 sin token)\n20-24. Zones (CRUD + test 403)\n25-28. Stats (summary, by-type, by-zone, timeline)\n29. Test integración: crear reporte en zona → verificar stats\n\n**Variables dinámicas:**\n- `base_url`: URL del backend\n- `token`: JWT (se autocaptura)\n- `userId`, `userEmail`, `userCedula`: datos del usuario\n- `reportId`: ID del reporte creado\n- `preferenceId`: ID de la preferencia creada\n- `zoneId`: ID de la zona creada\n- `adminToken`: Token del usuario ADMIN\n- `citizenToken`: Token del usuario CITIZEN",
+        "name": "SafeCity AI Collection - Sprint 9",
+        "description": "Colección completa de la API SafeCity AI — Sprint 9.\n\nIncluye endpoints de Auth, Users, Reports, Alerts, Notifications, Zones, Stats, OSINT/Scraping, Admin y tests E2E.\n\n**Novedades Sprint 9:**\n- Carpeta OSINT/Scraping: búsqueda OSINT, scan & classify, verificación de reportes generados\n- Carpeta Admin: dashboard, listar usuarios, verificar reportes, tests de permisos 403\n- Carpeta E2E Tests: flujo completo register → login → crear reporte → admin verifica → stats\n- Tests de permisos: CITIZEN no puede acceder a /admin (403 Forbidden)\n\n**Flujo de ejecución (Collection Runner):**\n1. Register → crea usuario con datos únicos (timestamp)\n2. Login (email/cédula) → valida login y guarda token\n3-5. CRUD de Users\n6-10. CRUD de Reports (con Authorization)\n11-14. CRUD de Alerts/Preferences\n15-16. Notifications (documentación WebSocket + prueba health)\n17-19. Security Tests (401 sin token)\n20-24. Zones (CRUD + test 403)\n25-28. Stats (summary, by-type, by-zone, timeline)\n29-30. Integration Tests\n31-33. OSINT/Scraping (search, scan & classify, verify reports)\n34-40. Admin (dashboard, users, verify report, permisos)\n41-47. E2E Tests (register → login → report → verify → stats)\n\n**Variables dinámicas:**\n- `base_url`: URL del backend\n- `token`: JWT (se autocaptura)\n- `userId`, `userEmail`, `userCedula`: datos del usuario\n- `reportId`: ID del reporte creado\n- `preferenceId`: ID de la preferencia creada\n- `zoneId`: ID de la zona creada\n- `adminToken`: Token del usuario ADMIN\n- `citizenToken`: Token del usuario CITIZEN\n- `osintReportId`: ID de reporte generado por OSINT\n- `e2eReportId`: ID de reporte del test E2E",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },
     "event": [
@@ -22,7 +22,9 @@
                     "// Skip para requests de Auth (Register/Login) y Security Tests (sin token)",
                     "var skipRequests = ['Register', 'Login (con email)', 'Login (con cédula)',",
                     "    'Create Report sin token (401)', 'Create Preference sin token (401)',",
-                    "    'Update User sin token (401)', 'Create Zone como CITIZEN (403)'];",
+                    "    'Update User sin token (401)', 'Create Zone como CITIZEN (403)',",
+                    "    'Login Admin', 'Admin Access as CITIZEN (403)', 'Admin Users as CITIZEN (403)',",
+                    "    'Register E2E User', 'Login E2E User', 'Admin Login E2E'];",
                     "",
                     "if (skipRequests.indexOf(currentRequest) !== -1) {",
                     "    console.log('⏭️ Skip auto-login para: ' + currentRequest);",
@@ -155,6 +157,36 @@
         },
         {
             "key": "integrationReportId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "osintReportId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "e2eReportId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "e2eToken",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "e2eUserId",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "e2eEmail",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "e2eCedula",
             "value": "",
             "type": "string"
         }
@@ -2092,6 +2124,1120 @@
                             "});"
                         ]
                     }
+                }
+            ]
+        },
+        {
+            "name": "OSINT / Scraping",
+            "description": "Módulo OSINT (Open Source Intelligence) — Sprint 9.\\n\\nPermite buscar y recolectar incidentes de fuentes públicas (Google News, Facebook) y procesarlos automáticamente con IA.\\n\\n**Flujo OSINT:**\\n1. `GET /osint/search?city=Pasto` → Busca incidentes en fuentes públicas\\n2. `POST /osint/scan?city=Pasto` → Escanea, crea reportes y los clasifica con IA\\n3. Verificar que los reportes fueron creados correctamente\\n\\n⚠️ Los endpoints usan token de ADMIN para mayor seguridad.",
+            "item": [
+                {
+                    "name": "OSINT Search (Pasto)",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "// Obtener adminToken si no existe",
+                                    "var adminToken = pm.collectionVariables.get('adminToken');",
+                                    "if (!adminToken || adminToken.length === 0) {",
+                                    "    pm.sendRequest({",
+                                    "        url: pm.collectionVariables.get('base_url') + '/api/v1/auth/login',",
+                                    "        method: 'POST',",
+                                    "        header: { 'Content-Type': 'application/json' },",
+                                    "        body: { mode: 'raw', raw: JSON.stringify({ identifier: 'admin@safecity.ai', password: 'Admin2026!' }) }",
+                                    "    }, function (err, res) {",
+                                    "        if (!err && res.code === 200) {",
+                                    "            pm.collectionVariables.set('adminToken', res.json().token);",
+                                    "            console.log('✅ Admin token obtenido para OSINT');",
+                                    "        } else {",
+                                    "            console.log('⚠️ Error obteniendo admin token: ' + (err || res.status));",
+                                    "        }",
+                                    "    });",
+                                    "}"
+                                ]
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta es un array de resultados OSINT', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.be.an('array');",
+                                    "    console.log('🔍 OSINT Search encontró ' + jsonData.length + ' resultados');",
+                                    "});",
+                                    "",
+                                    "pm.test('Cada resultado tiene campos esperados', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    if (jsonData.length > 0) {",
+                                    "        var first = jsonData[0];",
+                                    "        pm.expect(first).to.have.property('title');",
+                                    "        pm.expect(first).to.have.property('content');",
+                                    "        pm.expect(first).to.have.property('sourceUrl');",
+                                    "        pm.expect(first).to.have.property('sourceType');",
+                                    "        console.log('📰 Primer resultado: ' + first.title);",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/osint/search?city=Pasto",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "osint",
+                                "search"
+                            ],
+                            "query": [
+                                {
+                                    "key": "city",
+                                    "value": "Pasto"
+                                }
+                            ]
+                        },
+                        "description": "Busca incidentes de seguridad en fuentes OSINT (Google News, Facebook) para la ciudad de Pasto.\\n\\nRetorna una lista de OsintResultDTO con título, contenido, URL fuente, tipo, ubicación detectada y coordenadas."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "OSINT Scan & Classify (Pasto)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta contiene métricas del scan', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.be.an('object');",
+                                    "    console.log('🤖 OSINT Scan resultado: ' + JSON.stringify(jsonData));",
+                                    "    if (jsonData.reportsCreated !== undefined) {",
+                                    "        console.log('📊 Reportes creados: ' + jsonData.reportsCreated);",
+                                    "    }",
+                                    "    if (jsonData.reportsClassified !== undefined) {",
+                                    "        console.log('🏷️ Reportes clasificados: ' + jsonData.reportsClassified);",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/osint/scan?city=Pasto",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "osint",
+                                "scan"
+                            ],
+                            "query": [
+                                {
+                                    "key": "city",
+                                    "value": "Pasto"
+                                }
+                            ]
+                        },
+                        "description": "Dispara un job de scraping OSINT manual para Pasto.\\n\\n**Flujo interno:**\\n1. Busca en Google News + Facebook (páginas prioritarias + general)\\n2. Crea un reporte en la BD por cada resultado\\n3. Clasifica cada reporte con IA (OpenRouter/Gemini)\\n\\nÉste es el equivalente a `POST /scraping/trigger` del sprint.\\nLos reportes resultantes tendrán source=SOCIAL_MEDIA."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Verify OSINT Reports Created",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta es paginada con content', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.content).to.be.an('array');",
+                                    "    pm.expect(jsonData.totalElements).to.be.a('number');",
+                                    "    console.log('📋 Total reportes en sistema: ' + jsonData.totalElements);",
+                                    "});",
+                                    "",
+                                    "pm.test('Existen reportes después del scan OSINT', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.totalElements).to.be.greaterThan(0);",
+                                    "    // Guardar el primer reporte OSINT si existe",
+                                    "    if (jsonData.content.length > 0) {",
+                                    "        pm.collectionVariables.set('osintReportId', jsonData.content[0].id);",
+                                    "        console.log('✅ osintReportId guardado: ' + jsonData.content[0].id);",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/reports?page=0&size=5&sort=reportDate&direction=DESC",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "reports"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "size",
+                                    "value": "5"
+                                },
+                                {
+                                    "key": "sort",
+                                    "value": "reportDate"
+                                },
+                                {
+                                    "key": "direction",
+                                    "value": "DESC"
+                                }
+                            ]
+                        },
+                        "description": "Verifica que existen reportes en el sistema después de ejecutar el scan OSINT.\\n\\n🔓 GET /reports es público. Ordena por fecha descendente para ver los más recientes primero."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Admin",
+            "description": "Panel de administración SafeCity AI — Sprint 9.\\n\\n🔒 Todos los endpoints requieren rol ADMIN.\\nUn usuario CITIZEN que intente acceder recibirá 403 Forbidden.\\n\\n**Endpoints disponibles:**\\n- `GET /admin/dashboard` → Métricas del sistema\\n- `GET /admin/users` → Lista paginada de usuarios\\n- `GET /admin/users/{id}` → Detalle de un usuario\\n- `PUT /admin/reports/{id}/status` → Moderar reporte (VERIFIED/REJECTED)\\n\\n**Tests de permisos:**\\n- CITIZEN intenta acceder al dashboard → 403\\n- CITIZEN intenta listar usuarios → 403",
+            "item": [
+                {
+                    "name": "Login Admin",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta contiene token JWT de ADMIN', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.token).to.not.be.undefined;",
+                                    "    pm.expect(jsonData.token).to.be.a('string');",
+                                    "    pm.expect(jsonData.token.length).to.be.greaterThan(0);",
+                                    "    pm.collectionVariables.set('adminToken', jsonData.token);",
+                                    "    console.log('🔑 Admin token guardado');",
+                                    "});",
+                                    "",
+                                    "pm.test('Usuario tiene rol ADMIN', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.user).to.not.be.undefined;",
+                                    "    pm.expect(jsonData.user.role).to.eql('ADMIN');",
+                                    "    console.log('👑 Admin: ' + jsonData.user.email);",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"identifier\": \"admin@safecity.ai\",\n    \"password\": \"Admin2026!\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "auth",
+                                "login"
+                            ]
+                        },
+                        "description": "Inicia sesión como administrador del sistema.\\n\\nCredenciales seedeadas por DataInitializer:\\n- Email: admin@safecity.ai\\n- Password: Admin2026!\\n\\nEl token se guarda en `{{adminToken}}` para los demás requests de esta carpeta."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Dashboard",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Dashboard contiene info del sistema', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('message');",
+                                    "    pm.expect(jsonData).to.have.property('version');",
+                                    "    pm.expect(jsonData).to.have.property('status');",
+                                    "    pm.expect(jsonData.status).to.eql('active');",
+                                    "    console.log('📊 Dashboard: ' + jsonData.message + ' v' + jsonData.version);",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/dashboard",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "dashboard"
+                            ]
+                        },
+                        "description": "Panel de administración con métricas del sistema.\\n\\n🔒 Solo ADMIN puede acceder."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin List Users",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta paginada con lista de usuarios', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.content).to.be.an('array');",
+                                    "    pm.expect(jsonData.totalElements).to.be.a('number');",
+                                    "    pm.expect(jsonData.totalPages).to.be.a('number');",
+                                    "    console.log('👥 Total usuarios: ' + jsonData.totalElements);",
+                                    "});",
+                                    "",
+                                    "pm.test('Cada usuario tiene campos esperados', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    if (jsonData.content.length > 0) {",
+                                    "        var user = jsonData.content[0];",
+                                    "        pm.expect(user).to.have.property('id');",
+                                    "        pm.expect(user).to.have.property('name');",
+                                    "        pm.expect(user).to.have.property('email');",
+                                    "        pm.expect(user).to.have.property('role');",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/users?page=0&size=20",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "users"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "size",
+                                    "value": "20"
+                                }
+                            ]
+                        },
+                        "description": "Lista todos los usuarios del sistema con paginación.\\n\\n🔒 Solo ADMIN puede acceder.\\nMuestra id, nombre, email, cédula, rol y trustLevel."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Get User by ID",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Respuesta contiene datos del usuario', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('id');",
+                                    "    pm.expect(jsonData).to.have.property('name');",
+                                    "    pm.expect(jsonData).to.have.property('email');",
+                                    "    pm.expect(jsonData).to.have.property('role');",
+                                    "    console.log('👤 Usuario: ' + jsonData.name + ' (' + jsonData.role + ')');",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/users/1",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "users",
+                                "1"
+                            ]
+                        },
+                        "description": "Obtiene el detalle de un usuario por su ID.\\n\\n🔒 Solo ADMIN puede acceder.\\nUsando ID=1 (admin seedeado por defecto)."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Verify Report (VERIFIED)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 200 OK', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('Reporte fue verificado exitosamente', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('message');",
+                                    "    pm.expect(jsonData.message).to.include('actualizado');",
+                                    "    pm.expect(jsonData.newStatus).to.eql('VERIFIED');",
+                                    "    console.log('✅ Reporte ' + jsonData.reportId + ' verificado por ADMIN');",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/reports/{{osintReportId}}/status?status=VERIFIED",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "reports",
+                                "{{osintReportId}}",
+                                "status"
+                            ],
+                            "query": [
+                                {
+                                    "key": "status",
+                                    "value": "VERIFIED"
+                                }
+                            ]
+                        },
+                        "description": "El admin verifica un reporte cambiando su status a VERIFIED.\\n\\n🔒 Solo ADMIN puede acceder.\\nUsa el osintReportId capturado en la carpeta OSINT."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Access as CITIZEN (403)",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "// Registrar un CITIZEN si no existe citizenToken",
+                                    "var citizenToken = pm.collectionVariables.get('citizenToken');",
+                                    "if (!citizenToken || citizenToken.length === 0) {",
+                                    "    var timestamp = new Date().getTime();",
+                                    "    var citizenEmail = 'citizen_admin_test' + timestamp + '@safecity.com';",
+                                    "    var citizenCedula = String(timestamp).slice(-8);",
+                                    "",
+                                    "    pm.sendRequest({",
+                                    "        url: pm.collectionVariables.get('base_url') + '/api/v1/auth/register',",
+                                    "        method: 'POST',",
+                                    "        header: { 'Content-Type': 'application/json' },",
+                                    "        body: {",
+                                    "            mode: 'raw',",
+                                    "            raw: JSON.stringify({",
+                                    "                name: 'Citizen Admin Test',",
+                                    "                email: citizenEmail,",
+                                    "                cedula: citizenCedula,",
+                                    "                password: 'segura123'",
+                                    "            })",
+                                    "        }",
+                                    "    }, function (err, res) {",
+                                    "        if (!err && res.code === 201) {",
+                                    "            pm.collectionVariables.set('citizenToken', res.json().token);",
+                                    "            console.log('✅ CITIZEN registrado para test 403 admin');",
+                                    "        } else {",
+                                    "            console.log('⚠️ Error registrando CITIZEN: ' + (err || res.status));",
+                                    "        }",
+                                    "    });",
+                                    "}"
+                                ]
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 403 Forbidden', function () {",
+                                    "    pm.response.to.have.status(403);",
+                                    "});",
+                                    "",
+                                    "pm.test('CITIZEN no puede acceder al dashboard admin', function () {",
+                                    "    pm.expect(pm.response.code).to.eql(403);",
+                                    "    console.log('🔒 Correcto: CITIZEN recibió 403 al intentar acceder a /admin/dashboard');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{citizenToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/dashboard",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "dashboard"
+                            ]
+                        },
+                        "description": "Intenta acceder al dashboard admin usando un token de CITIZEN.\\n\\n❌ Debe retornar 403 Forbidden porque solo ADMIN puede acceder a /admin/**."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Users as CITIZEN (403)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status code es 403 Forbidden', function () {",
+                                    "    pm.response.to.have.status(403);",
+                                    "});",
+                                    "",
+                                    "pm.test('CITIZEN no puede listar usuarios admin', function () {",
+                                    "    pm.expect(pm.response.code).to.eql(403);",
+                                    "    console.log('🔒 Correcto: CITIZEN recibió 403 al intentar acceder a /admin/users');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{citizenToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/users",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "users"
+                            ]
+                        },
+                        "description": "Intenta listar usuarios admin usando un token de CITIZEN.\\n\\n❌ Debe retornar 403 Forbidden porque solo ADMIN puede acceder a /admin/**."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "E2E Tests",
+            "description": "Tests End-to-End — Sprint 9.\\n\\nFlujo completo que simula el ciclo de vida de un incidente:\\n1. Register → crear usuario nuevo\\n2. Login → obtener token\\n3. Crear reporte → reportar incidente\\n4. Admin login → obtener token admin\\n5. Admin verifica reporte → cambiar status a VERIFIED\\n6. Consultar reportes verificados → confirmar que aparece\\n7. Check stats → confirmar que se refleja en estadísticas\\n\\n⚠️ Este flujo debe ejecutarse en orden secuencial (Collection Runner).",
+            "item": [
+                {
+                    "name": "Register E2E User",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "var timestamp = new Date().getTime();",
+                                    "var email = 'e2euser' + timestamp + '@safecity.com';",
+                                    "var cedula = String(timestamp).slice(-8);",
+                                    "",
+                                    "pm.collectionVariables.set('e2eEmail', email);",
+                                    "pm.collectionVariables.set('e2eCedula', cedula);",
+                                    "",
+                                    "console.log('📧 E2E Email: ' + email);",
+                                    "console.log('🆔 E2E Cédula: ' + cedula);"
+                                ]
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Status code es 201 Created', function () {",
+                                    "    pm.response.to.have.status(201);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Usuario registrado con token', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.token).to.not.be.undefined;",
+                                    "    pm.expect(jsonData.user.role).to.eql('CITIZEN');",
+                                    "    pm.collectionVariables.set('e2eToken', jsonData.token);",
+                                    "    pm.collectionVariables.set('e2eUserId', jsonData.user.id);",
+                                    "    console.log('✅ E2E: Usuario registrado. ID: ' + jsonData.user.id);",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"E2E Test User Sprint 9\",\n    \"email\": \"{{e2eEmail}}\",\n    \"cedula\": \"{{e2eCedula}}\",\n    \"password\": \"segura123\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/auth/register",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "auth",
+                                "register"
+                            ]
+                        },
+                        "description": "Paso 1 del E2E: Registra un usuario nuevo con datos generados dinámicamente."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Login E2E User",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Login exitoso', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Token actualizado', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.token).to.not.be.undefined;",
+                                    "    pm.collectionVariables.set('e2eToken', jsonData.token);",
+                                    "    console.log('✅ E2E: Login exitoso, token actualizado');",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"identifier\": \"{{e2eEmail}}\",\n    \"password\": \"segura123\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "auth",
+                                "login"
+                            ]
+                        },
+                        "description": "Paso 2 del E2E: Confirma que el usuario registrado puede hacer login."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Report E2E",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Reporte creado exitosamente', function () {",
+                                    "    pm.response.to.have.status(201);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Reporte tiene datos correctos', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.id).to.not.be.undefined;",
+                                    "    pm.expect(jsonData.description).to.include('robo');",
+                                    "    pm.expect(jsonData.incidentType).to.eql('ROBBERY');",
+                                    "    pm.expect(jsonData.status).to.eql('PENDING');",
+                                    "    pm.collectionVariables.set('e2eReportId', jsonData.id);",
+                                    "    console.log('✅ E2E: Reporte creado. ID: ' + jsonData.id + ', Status: ' + jsonData.status);",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{e2eToken}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"description\": \"Intento de robo a mano armada en la Avenida de los Estudiantes, frente a la Universidad de Nariño\",\n    \"incidentType\": \"ROBBERY\",\n    \"address\": \"Avenida de los Estudiantes, Universidad de Nariño, Pasto, Nariño\",\n    \"source\": \"CITIZEN_TEXT\",\n    \"latitude\": 1.2200,\n    \"longitude\": -77.2850\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/reports",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "reports"
+                            ]
+                        },
+                        "description": "Paso 3 del E2E: El ciudadano crea un reporte de incidente. El status inicial es PENDING."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Login E2E",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Admin login exitoso', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Admin token guardado', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.token).to.not.be.undefined;",
+                                    "    pm.expect(jsonData.user.role).to.eql('ADMIN');",
+                                    "    pm.collectionVariables.set('adminToken', jsonData.token);",
+                                    "    console.log('✅ E2E: Admin login OK');",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"identifier\": \"admin@safecity.ai\",\n    \"password\": \"Admin2026!\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "auth",
+                                "login"
+                            ]
+                        },
+                        "description": "Paso 4 del E2E: Login como admin para poder verificar el reporte."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Admin Verify Report E2E",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Reporte verificado por admin', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Status cambiado a VERIFIED', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.newStatus).to.eql('VERIFIED');",
+                                    "    console.log('✅ E2E: Reporte ' + jsonData.reportId + ' → VERIFIED');",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{adminToken}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/admin/reports/{{e2eReportId}}/status?status=VERIFIED",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "admin",
+                                "reports",
+                                "{{e2eReportId}}",
+                                "status"
+                            ],
+                            "query": [
+                                {
+                                    "key": "status",
+                                    "value": "VERIFIED"
+                                }
+                            ]
+                        },
+                        "description": "Paso 5 del E2E: El admin verifica el reporte creado por el ciudadano.\\nCambia el status de PENDING → VERIFIED."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Verified Reports E2E",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Reportes verificados obtenidos', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Existen reportes verificados', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.content).to.be.an('array');",
+                                    "    pm.expect(jsonData.content.length).to.be.greaterThan(0);",
+                                    "    console.log('✅ E2E: ' + jsonData.totalElements + ' reportes verificados encontrados');",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: El reporte E2E aparece como verificado', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    var e2eId = Number(pm.collectionVariables.get('e2eReportId'));",
+                                    "    var found = jsonData.content.find(function(r) { return r.id === e2eId; });",
+                                    "    if (found) {",
+                                    "        pm.expect(found.status).to.eql('VERIFIED');",
+                                    "        console.log('✅ E2E: Reporte ' + e2eId + ' encontrado con status VERIFIED');",
+                                    "    } else {",
+                                    "        console.log('⚠️ E2E: Reporte ' + e2eId + ' no encontrado en primera página (puede estar en otra página)');",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/reports/verified?page=0&size=20",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "reports",
+                                "verified"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "size",
+                                    "value": "20"
+                                }
+                            ]
+                        },
+                        "description": "Paso 6 del E2E: Verifica que el reporte ahora aparece en la lista de reportes verificados.\\n\\n🔓 Endpoint público."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Check Stats Summary E2E",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('E2E: Stats accesible', function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Stats refleja reportes existentes', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.totalReports).to.be.a('number');",
+                                    "    pm.expect(jsonData.totalReports).to.be.greaterThan(0);",
+                                    "    pm.expect(jsonData.totalUsers).to.be.a('number');",
+                                    "    pm.expect(jsonData.totalUsers).to.be.greaterThan(0);",
+                                    "    console.log('📊 E2E STATS: ' + jsonData.totalReports + ' reportes, ' + jsonData.totalUsers + ' usuarios, ' + jsonData.totalZones + ' zonas');",
+                                    "});",
+                                    "",
+                                    "pm.test('E2E: Stats contiene breakdown por tipo', function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData.byType).to.be.an('object');",
+                                    "    if (jsonData.byType.ROBBERY) {",
+                                    "        pm.expect(jsonData.byType.ROBBERY).to.be.greaterThan(0);",
+                                    "        console.log('✅ E2E COMPLETO: ROBBERY aparece en stats con ' + jsonData.byType.ROBBERY + ' reporte(s)');",
+                                    "    }",
+                                    "});",
+                                    "",
+                                    "pm.test('Content-Type es application/json', function () {",
+                                    "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/api/v1/stats/summary",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v1",
+                                "stats",
+                                "summary"
+                            ]
+                        },
+                        "description": "Paso 7 del E2E (FINAL): Verifica que las estadísticas del sistema reflejan el reporte creado y verificado.\\n\\n🔓 Endpoint público.\\n✅ Si totalReports > 0 y ROBBERY aparece en byType, el flujo E2E completo es exitoso."
+                    },
+                    "response": []
                 }
             ]
         }

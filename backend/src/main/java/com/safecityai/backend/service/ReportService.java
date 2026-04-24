@@ -5,6 +5,7 @@ import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.Zone;
+import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.ZoneRepository;
@@ -23,17 +24,49 @@ public class ReportService {
     private final ReportRepository reportRepository;
     private final NotificationService notificationService;
     private final ZoneRepository zoneRepository;
+    private final IAClassificationService iaClassificationService;
+    private final GeocodingService geocodingService;
+    private final UserService userService;
 
     @Transactional
-    public ReportResponseDTO createReport(ReportCreateDTO dto) {
+    public ReportResponseDTO createReport(ReportCreateDTO dto, String userEmail) {
         log.info("Creando nuevo reporte de tipo: {}", dto.getIncidentType());
 
         Report report = convertToEntity(dto);
+
+        // ═══════════════ REVERSE GEOCODING ═══════════════
+        // Si el usuario envió coordenadas GPS pero NO dirección,
+        // convertimos las coordenadas a nombre de barrio automáticamente
+        // Ejemplo: (1.2136, -77.2784) → "Anganoy, Pasto"
+        if (report.getLatitude() != null && report.getLongitude() != null
+                && (report.getAddress() == null || report.getAddress().isBlank())) {
+            String address = geocodingService.reverseGeocode(
+                    report.getLatitude(), report.getLongitude());
+            report.setAddress(address);
+            log.info("Geocoding: ({}, {}) → {}", report.getLatitude(), report.getLongitude(), address);
+        }
+
+        // Vincular reporte al usuario autenticado
+        if (userEmail != null) {
+            try {
+                User user = userService.findByEmail(userEmail);
+                report.setReportedBy(user);
+            } catch (Exception e) {
+                log.warn("No se pudo vincular usuario {} al reporte: {}", userEmail, e.getMessage());
+            }
+        }
+
         Report savedReport = reportRepository.save(report);
         ReportResponseDTO response = convertToDTO(savedReport);
 
         // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
         notificationService.notifyNewReport(response);
+
+        // ═══════════════ IA: CLASIFICAR EN BACKGROUND (ASYNC) ═══════════════
+        // classifyAsync() corre en otro hilo (Thread Pool "iaExecutor")
+        // El usuario recibe respuesta INMEDIATA, la IA trabaja en background
+        // Si falla, el reporte queda PENDING para revisión manual
+        iaClassificationService.classifyAsync(savedReport.getId());
 
         log.info("Reporte creado exitosamente con ID: {}", savedReport.getId());
         return response;
@@ -97,7 +130,11 @@ public class ReportService {
     public void updateStatus(Long id, ReportStatus newStatus) {
         Report report = findReportOrThrow(id);
         report.setStatus(newStatus);
-        reportRepository.save(report);
+        report = reportRepository.save(report);
+        
+        // ¡CRUCIAL para que los usuarios vean el cambio de estado en vivo!
+        notificationService.notifyReportUpdated(convertToDTO(report));
+        
         log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
     }
 
@@ -171,6 +208,7 @@ public class ReportService {
                 .longitude(report.getLongitude())
                 .photoUrl(report.getPhotoUrl())
                 .trustScore(report.getTrustScore())
+                .aiAnalysis(report.getAiAnalysis())
                 .zoneId(report.getZoneId() != null ? report.getZoneId() : (report.getZone() != null ? report.getZone().getId() : null))
                 .zoneName(zoneName)
                 .reportDate(report.getReportDate())

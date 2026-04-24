@@ -1,15 +1,21 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.IAClassificationDTO;
+import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.model.Report;
+import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.IncidentType;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.safecityai.backend.repository.ReportRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
@@ -18,24 +24,31 @@ import java.util.Map;
 /**
  * Motor de IA para clasificar reportes y calcular trust score.
  * Flujo:
- * 1. Intenta clasificar con Gemini
- * 2. Si Gemini falla → usa heuristica (reglas fijas) como respaldo
+ * 1. Intenta clasificar con OpenRouter (Gemma 3 12B, gratis)
+ * 2. Si OpenRouter falla → usa heuristica (reglas fijas) como respaldo
  */
+@Slf4j
 @Service
 public class IAClassificationService {
 
     private final ReportRepository reportRepository;
+    private final NotificationService notificationService;
+    private final NotificationUserService notificationUserService;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.gemini.api-key}")
-    private String geminiApiKey;
+    @Value("${app.openrouter.api-key}")
+    private String openRouterApiKey;
 
-    @Value("${app.gemini.model:gemini-1.5-flash}")
-    private String geminiModel;
+    @Value("${app.openrouter.model:openai/gpt-oss-120b:free}")
+    private String openRouterModel;
 
-    public IAClassificationService(ReportRepository reportRepository) {
+    public IAClassificationService(ReportRepository reportRepository,
+            NotificationService notificationService,
+            NotificationUserService notificationUserService) {
         this.reportRepository = reportRepository;
+        this.notificationService = notificationService;
+        this.notificationUserService = notificationUserService;
         this.restTemplate = new RestTemplate();
         this.objectMapper = new ObjectMapper();
     }
@@ -52,10 +65,14 @@ public class IAClassificationService {
         IAClassificationDTO result;
 
         try {
-            // FASE 2: Intentar con Gemini
-            result = classifyWithGemini(report);
+            // Intentar con OpenRouter (Gemma 3)
+            result = classifyWithAI(report);
+            log.info("[IA] Reporte {} clasificado con OpenRouter/Gemma (score: {})",
+                    reportId, result.getTrustScore());
         } catch (Exception e) {
-            // FALLBACK: Si Gemini falla, usar heuristica
+            // FALLBACK: Si OpenRouter falla, usar heuristica
+            log.warn("[IA] OpenRouter falló para reporte {}. Razón: {}. Usando heurística.",
+                    reportId, e.getMessage());
             result = classifyWithHeuristics(report);
             result.setReasoning("[Fallback heuristico] " + result.getReasoning());
         }
@@ -68,98 +85,294 @@ public class IAClassificationService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // FASE 2: Clasificacion con Gemini
+    // MÉTODO @Async — Se ejecuta en un HILO SEPARADO (background)
     // ═══════════════════════════════════════════════════════════════
+    //
+    // ¿Cómo funciona @Async?
+    // ─────────────────────────
+    // 1. ReportService.createReport() llama classifyAsync(id)
+    // 2. Spring intercepta la llamada y la pone en la cola del
+    // ThreadPool "iaExecutor" (definido en AsyncConfig)
+    // 3. createReport() retorna INMEDIATAMENTE al usuario → no espera
+    // 4. Cuando hay un hilo libre en el pool, ejecuta este método
+    // 5. Si Gemini tarda 5 seg, el usuario NO se entera
+    //
+    // REGLA IMPORTANTE de @Async:
+    // El método @Async DEBE ser llamado desde OTRA clase.
+    // Si llamas this.classifyAsync() desde DENTRO de esta clase,
+    // Spring NO lo intercepta y se ejecuta SINCRÓNICAMENTE.
+    // Por eso ReportService (otra clase) es quien lo llama.
+    //
+    // @Transactional: necesitamos nuestra propia transacción
+    // porque la transacción de createReport() ya terminó.
+    //
+    @Async("iaExecutor") // ← Usa el ThreadPool que configuramos
+    @Transactional
+    public void classifyAsync(Long reportId) {
+        log.info("[IA-Async] Iniciando clasificación del reporte ID: {}", reportId);
 
-    private IAClassificationDTO classifyWithGemini(Report report) {
+        try {
+            // 1. Clasificar (reutiliza toda la lógica existente)
+            IAClassificationDTO result = classifyReport(reportId);
+
+            // 2. Buscar el reporte FRESCO de BD (nueva transacción)
+            Report report = reportRepository.findById(reportId).orElse(null);
+            if (report == null) {
+                log.warn("[IA-Async] Reporte {} no encontrado, posiblemente eliminado", reportId);
+                return;
+            }
+
+            // 3. Guardar el análisis textual de la IA
+            report.setAiAnalysis(result.getReasoning());
+
+            // 4. CAMBIAR TIPO si la IA sugiere uno diferente
+            IncidentType originalType = report.getIncidentType();
+            boolean typeChanged = false;
+            if (result.getSuggestedType() != null
+                    && !result.getSuggestedType().equals(originalType)) {
+                report.setIncidentType(result.getSuggestedType());
+                typeChanged = true;
+                log.info("[IA-Async] Reporte {} reclasificado: {} → {}",
+                        reportId, originalType, result.getSuggestedType());
+            }
+
+            // 5. AUTO-VERIFICAR o AUTO-ELIMINAR basado en el trustScore
+            User reportOwner = report.getReportedBy();
+
+            if (result.getTrustScore() >= 50.0) {
+                report.setStatus(ReportStatus.VERIFIED);
+                log.info("[IA-Async] Reporte {} auto-verificado (score: {})",
+                        reportId, result.getTrustScore());
+                reportRepository.save(report);
+
+                // Notificar al frontend via WebSocket
+                ReportResponseDTO dto = convertToDTO(report);
+                notificationService.notifyReportUpdated(dto);
+
+                // Notificación persistente al usuario
+                if (reportOwner != null) {
+                    if (typeChanged) {
+                        notificationUserService.createNotification(
+                                reportOwner, report,
+                                "Reporte reclasificado",
+                                "Tu reporte #" + reportId + " fue aceptado pero se reclasificó de "
+                                        + originalType + " a " + result.getSuggestedType() + ".",
+                                "WARNING");
+                    } else {
+                        notificationUserService.createNotification(
+                                reportOwner, report,
+                                "Reporte verificado",
+                                "Tu reporte #" + reportId + " fue verificado exitosamente por la IA.",
+                                "INFO");
+                    }
+                }
+
+            } else if (result.getTrustScore() == 0.0) {
+                // Notificación ANTES de eliminar (necesitamos la referencia al report)
+                if (reportOwner != null) {
+                    notificationUserService.createNotification(
+                            reportOwner, null,
+                            "Reporte rechazado",
+                            "Tu reporte #" + reportId + " fue rechazado por la IA por no ser válido.",
+                            "ALERT");
+                }
+
+                log.info("[IA-Async] Reporte {} ELIMINADO por ser basura (score: 0.0)", reportId);
+                reportRepository.delete(report);
+                notificationService.notifyReportDeleted(reportId);
+
+            } else {
+                report.setStatus(ReportStatus.PENDING);
+                log.info("[IA-Async] Reporte {} queda PENDING para revisión manual (score: {})",
+                        reportId, result.getTrustScore());
+                reportRepository.save(report);
+
+                ReportResponseDTO dto = convertToDTO(report);
+                notificationService.notifyReportUpdated(dto);
+
+                // Notificación persistente al usuario
+                if (reportOwner != null) {
+                    String msg = typeChanged
+                            ? "Tu reporte #" + reportId + " está en revisión manual. Se reclasificó de "
+                                    + originalType + " a " + result.getSuggestedType() + "."
+                            : "Tu reporte #" + reportId + " está pendiente de revisión manual.";
+                    notificationUserService.createNotification(
+                            reportOwner, report,
+                            "Reporte en revisión",
+                            msg,
+                            typeChanged ? "WARNING" : "INFO");
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("[IA-Async] Error clasificando reporte {}: {}",
+                    reportId, e.getMessage(), e);
+        }
+    }
+
+    private ReportResponseDTO convertToDTO(Report report) {
+        return ReportResponseDTO.builder()
+                .id(report.getId())
+                .description(report.getDescription())
+                .incidentType(report.getIncidentType())
+                .address(report.getAddress())
+                .status(report.getStatus())
+                .source(report.getSource())
+                .latitude(report.getLatitude())
+                .longitude(report.getLongitude())
+                .trustScore(report.getTrustScore())
+                .aiAnalysis(report.getAiAnalysis())
+                .reportDate(report.getReportDate())
+                .build();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLASIFICACIÓN CON IA REAL (OpenRouter — Gemma 3 12B)
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // OpenRouter es un servicio que da acceso GRATIS a modelos de IA
+    // como Google Gemma 3 12B (12 mil millones de parámetros).
+    //
+    // API compatible con OpenAI → usa /chat/completions
+    // Diferencia clave vs Gemini:
+    // - Gemini: POST .../generateContent + body { contents: [...] }
+    // - OpenRouter: POST .../chat/completions + body { messages: [...] }
+    //
+
+    private IAClassificationDTO classifyWithAI(Report report) {
         String prompt = buildPrompt(report);
-        String geminiResponse = callGeminiAPI(prompt);
-        return parseGeminiResponse(geminiResponse, report.getId());
+        String aiResponse = callOpenRouterAPI(prompt);
+        return parseOpenRouterResponse(aiResponse, report.getId());
     }
 
     private String buildPrompt(Report report) {
         StringBuilder prompt = new StringBuilder();
         prompt.append(
-                "Eres un experto en seguridad ciudadana y analisis de incidentes en la ciudad de San Juan de Pasto, Colombia. ");
+                "Eres un Analista de Veracidad y Clasificación de Incidentes para SafeCityAI en Pasto, Colombia. ");
         prompt.append(
-                "Analiza el siguiente reporte ciudadano y devuelve UNICAMENTE un JSON valido (sin markdown, sin explicaciones, solo el JSON).\n\n");
+                "Eres un Analista de Veracidad y Clasificación de Incidentes para SafeCityAI en Pasto, Colombia. ");
+        prompt.append(
+                "Tu objetivo es filtrar reportes falsos y asegurar que la categoría del incidente sea la correcta.\n\n");
 
         prompt.append("=== DATOS DEL REPORTE ===\n");
-        prompt.append("Descripcion: ").append(report.getDescription()).append("\n");
-        prompt.append("Tipo reportado: ").append(report.getIncidentType()).append("\n");
-        prompt.append("Direccion: ").append(report.getAddress() != null ? report.getAddress() : "No proporcionada")
+        prompt.append("- Descripción del usuario: \"").append(report.getDescription()).append("\"\n");
+        prompt.append("- Categoría marcada por usuario: ").append(report.getIncidentType()).append("\n");
+        prompt.append("- Coordenadas GPS: ").append(report.getLatitude() != null ? "DISPONIBLES" : "NO DISPONIBLES")
                 .append("\n");
-        prompt.append("Tiene GPS: ").append(report.getLatitude() != null ? "Si" : "No").append("\n");
-        prompt.append("Tiene foto: ").append(report.getPhotoUrl() != null ? "Si" : "No").append("\n");
-        prompt.append("Fuente: ").append(report.getSource()).append("\n\n");
+        prompt.append("- Evidencia Fotográfica: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n\n");
 
-        prompt.append("=== RESPONDE CON ESTE JSON EXACTO ===\n");
+        prompt.append("=== TAREAS CRÍTICAS ===\n");
+        prompt.append(
+                "1. ANALIZAR COHERENCIA: Si el reporte describe situaciones imposibles (tanques de guerra, aliens, pistolas de agua, superhéroes), el trustScore es 0.\n");
+        prompt.append("2. VALIDAR CATEGORÍA: Revisa si la descripción coincide con la categoría marcada. ");
+        prompt.append(
+                "Si el usuario marcó 'TRAFFIC' pero describe un robo a mano armada, DEBES cambiar 'suggestedType' a 'ROBBERY'.\n");
+        prompt.append(
+                "Categorías permitidas para 'suggestedType': [ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER].\n\n");
+
+        prompt.append("=== REGLAS DE PUNTUACIÓN ===\n");
+        prompt.append("- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos, ruedas de prensa o noticia politica/general y NO describe un incidente especifico, el trustScore DEBE SER 0.\n");
+        prompt.append("- Descripción detallada y seria: +30 pts.\n");
+        prompt.append("- Datos verificables (GPS/Foto): +30 pts.\n");
+        prompt.append("- Reporte vago o sospecha de broma: TrustScore = 0.\n");
+        prompt.append("- Si la descripción es puro texto aleatorio (gibberish): TrustScore = 0.\n\n");
+
+        prompt.append("=== FORMATO DE SALIDA (JSON ÚNICAMENTE) ===\n");
         prompt.append("{\n");
-        prompt.append("  \"trustScore\": <numero entre 0 y 100>,\n");
-        prompt.append(
-                "  \"suggestedType\": \"<uno de: ROBBERY, ASSAULT, VANDALISM, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER>\",\n");
-        prompt.append("  \"reasoning\": \"<explicacion breve en espanol de por que diste ese puntaje>\",\n");
-        prompt.append("  \"shouldVerify\": <true si el score es mayor a 40>\n");
+        prompt.append("  \"trustScore\": <0-100>,\n");
+        prompt.append("  \"suggestedType\": \"<CATEGORIA_CORREGIDA>\",\n");
+        prompt.append("  \"reasoning\": \"<Explicación de la puntuación y si se cambió la categoría>\",\n");
+        prompt.append("  \"shouldVerify\": <true si score > 50>\n");
         prompt.append("}\n\n");
-
-        prompt.append("REGLAS de puntuación:\n");
         prompt.append(
-                "- REGLA ESTRICTA DE RECHAZO: Si el texto habla de operativos de control preventivos, ruedas de prensa, captura de hace tiempo, o es una noticia politica/general y NO describe un incidente especifico ocurriendo, el trustScore DEBE SER EXACTAMENTE 0.\n");
-        prompt.append("- Descripcion detallada y coherente: +20 a +30 puntos\n");
-        prompt.append("- Tiene coordenadas GPS: +15 puntos\n");
-        prompt.append("- Tiene foto adjunta: +20 puntos\n");
-        prompt.append("- Fuente confiable (ciudadano directo): +10 puntos\n");
-        prompt.append("- Descripcion vaga o poco clara: -10 a -30 puntos\n");
-        prompt.append("- Base de partida para incidentes reales: 30 puntos\n");
+                "INSTRUCCIÓN FINAL: Sé extremadamente escéptico. Si tienes la más mínima duda de que el reporte es falso o una exageración, inclínate por un trustScore menor a 15 y shouldVerify: false.");
 
         return prompt.toString();
     }
 
     /**
-     * Hace la peticion HTTP a la API de Google Gemini.
-     * Endpoint: POST /v1beta/models/{model}:generateContent
+     * Hace la petición HTTP a OpenRouter con RETRY y FALLBACK.
+     *
+     * Estrategia anti-rate-limit:
+     * 1. Intenta con el modelo principal (Gemma 3 12B)
+     * 2. Si da 429 → espera 3 seg → reintenta
+     * 3. Si sigue fallando → prueba con modelo alternativo (Llama 3.2 3B)
+     * 4. Si todo falla → lanza excepción → cae a la heurística
      */
-    private String callGeminiAPI(String prompt) {
-        String url = String.format(
-                "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-                geminiModel, geminiApiKey);
+    private static final String FALLBACK_MODEL = "google/gemma-3-12b-it:free";
+    private static final int RETRY_DELAY_MS = 3000;
 
-        // Construir el body que Gemini espera
+    private String callOpenRouterAPI(String prompt) {
+        // Intento 1: modelo principal
+        try {
+            return doOpenRouterCall(prompt, openRouterModel);
+        } catch (Exception e1) {
+            if (!e1.getMessage().contains("429"))
+                throw e1;
+
+            log.info("[IA] Modelo {} rate-limited, reintentando en {}ms...",
+                    openRouterModel, RETRY_DELAY_MS);
+        }
+
+        // Esperar antes de reintentar
+        try {
+            Thread.sleep(RETRY_DELAY_MS);
+        } catch (InterruptedException ignored) {
+        }
+
+        // Intento 2: mismo modelo después de esperar
+        try {
+            return doOpenRouterCall(prompt, openRouterModel);
+        } catch (Exception e2) {
+            if (!e2.getMessage().contains("429"))
+                throw e2;
+
+            log.info("[IA] Modelo {} sigue rate-limited, probando fallback: {}",
+                    openRouterModel, FALLBACK_MODEL);
+        }
+
+        // Intento 3: modelo alternativo (Llama 3.2 3B)
+        return doOpenRouterCall(prompt, FALLBACK_MODEL);
+    }
+
+    private String doOpenRouterCall(String prompt, String model) {
+        String url = "https://openrouter.ai/api/v1/chat/completions";
+
         Map<String, Object> body = Map.of(
-                "contents", List.of(
-                        Map.of("parts", List.of(
-                                Map.of("text", prompt)))),
-                "generationConfig", Map.of(
-                        "temperature", 0.3,
-                        "maxOutputTokens", 500));
+                "model", model,
+                "messages", List.of(
+                        Map.of("role", "user", "content", prompt)),
+                "temperature", 0.3,
+                "max_tokens", 500);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(openRouterApiKey);
+        headers.set("HTTP-Referer", "https://safecityai.onrender.com");
+        headers.set("X-Title", "SafeCity AI");
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
         ResponseEntity<String> response = restTemplate.exchange(
                 url, HttpMethod.POST, request, String.class);
 
+        log.info("[IA] Respuesta exitosa de OpenRouter usando modelo: {}", model);
         return response.getBody();
     }
 
     /**
-     * Parsea la respuesta de Gemini y extrae el JSON con la clasificacion.
-     * La respuesta de Gemini viene asi:
-     * { "candidates": [{ "content": { "parts": [{ "text": "{ trustScore: 75 ... }"
-     * }] } }] }
+     * Parsea la respuesta de OpenRouter (formato OpenAI).
+     * Estructura: { "choices": [{ "message": { "content": "{ JSON }" } }] }
      */
-    private IAClassificationDTO parseGeminiResponse(String responseBody, Long reportId) {
+    private IAClassificationDTO parseOpenRouterResponse(String responseBody, Long reportId) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            String generatedText = root
-                    .path("candidates").get(0)
-                    .path("content")
-                    .path("parts").get(0)
-                    .path("text").asText();
 
-            // Limpia el texto
+            String generatedText = root
+                    .path("choices").get(0)
+                    .path("message")
+                    .path("content").asText();
+
             generatedText = generatedText
                     .replace("```json", "")
                     .replace("```", "")
@@ -172,7 +385,6 @@ public class IAClassificationService {
             String reasoning = classification.path("reasoning").asText("Sin razonamiento disponible");
             boolean shouldVerify = classification.path("shouldVerify").asBoolean(true);
 
-            // Convertir el tipo sugerido
             IncidentType suggestedType;
             try {
                 suggestedType = IncidentType.valueOf(suggestedTypeStr);
@@ -185,12 +397,12 @@ public class IAClassificationService {
                     .trustScore(trustScore)
                     .trustLevel(scoreToLevel(trustScore))
                     .suggestedType(suggestedType)
-                    .reasoning("[Gemini AI] " + reasoning)
+                    .reasoning("[IA OpenRouter] " + reasoning)
                     .shouldVerify(shouldVerify)
                     .build();
 
         } catch (Exception e) {
-            throw new RuntimeException("Error parseando respuesta de Gemini: " + e.getMessage(), e);
+            throw new RuntimeException("Error parseando respuesta de OpenRouter: " + e.getMessage(), e);
         }
     }
 
@@ -214,6 +426,15 @@ public class IAClassificationService {
     }
 
     private double calculateTrustScore(Report report) {
+        String desc = report.getDescription();
+
+        // ═══ VALIDACIÓN ANTI-GIBBERISH ═══
+        if (desc == null || desc.isBlank() || isGibberish(desc)) {
+            log.info("[Heuristica] Texto detectado como gibberish/vacío: '{}'",
+                    desc != null ? desc.substring(0, Math.min(desc.length(), 30)) : "null");
+            return 0.0;
+        }
+
         double score = 0.0;
 
         // 1. Base por fuente (CITIZEN_TEXT=50, INSTITUTIONAL=80, SOCIAL_MEDIA=60, default=30)
@@ -264,6 +485,58 @@ public class IAClassificationService {
                 * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c; // Distancia en km
+    }
+
+    private boolean isGibberish(String text) {
+        if (text == null || text.isBlank())
+            return true;
+
+        String clean = text.toLowerCase().replaceAll("[^a-záéíóúñü\\s]", "").trim();
+        if (clean.length() < 5)
+            return true;
+
+        // 1. Ratio de vocales — español normal ≈ 40-50%
+        long vowels = clean.chars().filter(c -> "aeiouáéíóú".indexOf(c) >= 0).count();
+        long letters = clean.chars().filter(Character::isLetter).count();
+        if (letters > 0) {
+            double ratio = (double) vowels / letters;
+            // Si ratio < 15% o > 70% → probablemente gibberish
+            if (ratio < 0.15 || ratio > 0.70)
+                return true;
+        }
+
+        // 2. Verificar que contenga al menos 1 palabra real en español
+        String[] palabrasReales = {
+                "robo", "atraco", "hurto", "asalto", "accidente", "choque",
+                "moto", "carro", "calle", "avenida", "barrio", "casa",
+                "persona", "personas", "hombre", "mujer", "arma", "cuchillo",
+                "pistola", "noche", "dia", "fue", "hubo", "hay", "esta",
+                "estan", "paso", "ocurrio", "zona", "lugar", "cerca",
+                "ayuda", "policia", "herido", "muerto", "sangre",
+                "tienda", "banco", "parque", "esquina", "semaforo",
+                "transito", "trafico", "vehiculo", "bus", "taxi",
+                "peligro", "peligroso", "sospechoso", "robaron", "atacaron",
+                "armada", "blanca", "fuego", "disparo", "disparos"
+        };
+
+        String lowerText = text.toLowerCase();
+        boolean tieneAlMenosUnaPalabraReal = false;
+        for (String palabra : palabrasReales) {
+            if (lowerText.contains(palabra)) {
+                tieneAlMenosUnaPalabraReal = true;
+                break;
+            }
+        }
+
+        // 3. Si no tiene ninguna palabra real Y tiene menos de 30 chars → gibberish
+        if (!tieneAlMenosUnaPalabraReal && clean.length() < 30)
+            return true;
+
+        // 4. Detectar caracteres repetidos (ej: "aaaaaa", "jjjjj")
+        if (clean.replaceAll("(.)\\1{3,}", "").length() < clean.length() / 2)
+            return true;
+
+        return false;
     }
 
     public IncidentType detectIncidentType(String description) {

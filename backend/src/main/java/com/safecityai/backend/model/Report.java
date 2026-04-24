@@ -63,6 +63,16 @@ public class Report {
     @Column(name = "trust_score")
     private Double trustScore;
 
+    // Razonamiento de la IA sobre su clasificación
+    // ¿Por qué 2000 chars? Gemini puede devolver explicaciones largas,
+    // pero no queremos guardar un libro. 2000 es suficiente para un párrafo detallado.
+    @Column(name = "ai_analysis", length = 2000)
+    private String aiAnalysis;
+
+    // Hash de la descripción para deduplicación OSINT
+    @Column(name = "description_hash")
+    private String descriptionHash;
+
     // Relacion: cada reporte pertenece a un usuario
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")

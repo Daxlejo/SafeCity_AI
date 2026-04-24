@@ -42,4 +42,11 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
             @org.springframework.data.repository.query.Param("type") com.safecityai.backend.model.enums.IncidentType type, 
             @org.springframework.data.repository.query.Param("since") java.time.LocalDateTime since, 
             @org.springframework.data.repository.query.Param("excludeId") Long excludeId);
+
+    // Reportes recientes (últimos N días) para ranking semanal
+    @Query("SELECT r FROM Report r WHERE r.reportDate >= :since AND r.latitude IS NOT NULL")
+    List<Report> findRecentWithCoordinates(java.time.LocalDateTime since);
+
+    // Deduplicación OSINT: verificar si ya existe un reporte con el mismo hash de descripción
+    boolean existsByDescriptionHash(String descriptionHash);
 }
