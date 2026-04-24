@@ -39,6 +39,11 @@ public class JwtService {
         return extractClaims(token).getSubject();
     }
 
+    // Extrae el rol del token (guardado como claim "role")
+    public String extractRole(String token) {
+        return extractClaims(token).get("role", String.class);
+    }
+
     // Valida que el token no esté expirado y sea válido
     public boolean isTokenValid(String token) {
         try {

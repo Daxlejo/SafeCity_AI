@@ -37,4 +37,8 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     // Deduplicación OSINT: verificar si ya existe un reporte con el mismo hash de descripción
     boolean existsByDescriptionHash(String descriptionHash);
+
+    // Reputación histórica del usuario: promedio de trust score de sus reportes verificados
+    @Query("SELECT AVG(r.trustScore) FROM Report r WHERE r.reportedBy.id = :userId AND r.status = 'VERIFIED' AND r.trustScore IS NOT NULL")
+    Double findAverageTrustScoreByUser(Long userId);
 }
