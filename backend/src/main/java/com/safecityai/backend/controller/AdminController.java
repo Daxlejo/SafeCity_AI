@@ -32,7 +32,7 @@ public class AdminController {
         return ResponseEntity.ok(Map.of(
             "message", "SafeCity AI Admin Dashboard",
             "version", "1.0.0-sprint9",
-            "status", "running"
+            "status", "active"
         ));
     }
 
