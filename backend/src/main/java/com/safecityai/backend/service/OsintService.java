@@ -56,6 +56,26 @@ public class OsintService {
                         "Nariño Noticias La Original",
                         "La Voz Del pueblo Noticias Nariño");
 
+        // Lugares físicos identificables de Pasto usados para validar ubicabilidad
+        private static final List<String> PASTO_LOCATIONS = List.of(
+                        "panamericana", "pananericana", "lorenzo", "jongovito", "anganoy",
+                        "avenida", "carrera", "calle", "sector", "barrio", "comuna",
+                        "parque", "plaza", "hospital", "clínica", "clinica",
+                        "universidad", "centro comercial", "terminal", "aeropuerto",
+                        "chapal", "aranda", "torobajo", "san ignacio", "miraflores",
+                        "obrero", "chambú", "chambu", "niza", "tamasagra",
+                        "villa flor", "jamondino", "catambuco", "tangua", "chachagui",
+                        "buesaco", "la floresta", "santa barbara", "santa bárbara");
+
+        // Términos políticos y mundanos que deben excluirse del OSINT
+        private static final List<String> POLITICAL_BLACKLIST = List.of(
+                        "petro", "alcalde", "gobernacion", "gobernación", "congreso",
+                        "senado", "diputado", "concejal", "presidente", "gobierno",
+                        "politico", "político", "partido", "elecciones", "campaña",
+                        "cultural", "deportivo", "deporte", "festival", "concierto",
+                        "sintetico", "sintético", "empleo", "trabajo", "venta",
+                        "economía", "economia", "impuesto", "plebiscito");
+
         // ═══════════════════════════════════════════════════════════
         // SCHEDULER: Escaneo automático cada hora
         // ═══════════════════════════════════════════════════════════
@@ -106,6 +126,16 @@ public class OsintService {
                                 String contentHash = hashContent(osint.getContent());
                                 if (reportRepository.existsByDescriptionHash(contentHash)) {
                                         skippedDuplicates++;
+                                        continue;
+                                }
+
+                                // Filtro 3 (OSINT EXCLUSIVO): Solo crear si el texto menciona
+                                // un lugar físico verificable de Pasto. Esto NO aplica a reportes
+                                // ciudadanos, que siempre tienen GPS o selección en mapa.
+                                if (!isLocatable(osint.getContent())) {
+                                        log.info("[OSINT] Descartado por no ser ubicable: '{}'",
+                                                        osint.getContent().substring(0, Math.min(osint.getContent().length(), 60)));
+                                        skippedDuplicates++; // contar como saltado
                                         continue;
                                 }
 
@@ -270,52 +300,65 @@ public class OsintService {
         private List<OsintResultDTO> searchGoogleNews(String city) {
                 List<OsintResultDTO> results = new ArrayList<>();
 
-                // Buscamos incidentes reales, no noticias politicas de "seguridad"
-                String query = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio)+" + city.replace(" ", "+");
+                // ─── Sesión 1: incidentes generales en la ciudad ───
+                String query1 = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio+OR+choque)+" + city.replace(" ", "+");
+                results.addAll(fetchGoogleNewsRSS(query1, city, 8));
+
+                // ─── Sesión 2: incidentes geolocalizados con vías/barrios de Pasto ───
+                // Fuerza que la noticia mencione un lugar físico real
+                String query2 = "(accidente+OR+robo+OR+choque+OR+herido+OR+atropello)+(panamericana+OR+lorenzo+OR+anganoy+OR+avenida+OR+sector+OR+barrio)+" + city.replace(" ", "+");
+                results.addAll(fetchGoogleNewsRSS(query2, city, 8));
+
+                log.info("Google News total (ambas sesiones): {} resultados para '{}'", results.size(), city);
+                return results;
+        }
+
+        /** Descarga y parsea un RSS de Google News para una query dada */
+        private List<OsintResultDTO> fetchGoogleNewsRSS(String query, String city, int maxItems) {
+                List<OsintResultDTO> results = new ArrayList<>();
                 String url = String.format(
                                 "https://news.google.com/rss/search?q=%s&hl=es-419&gl=CO&ceid=CO:es-419",
                                 query);
 
-                ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-                String xml = response.getBody();
+                try {
+                        ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+                        String xml = response.getBody();
+                        if (xml == null) return results;
 
-                if (xml == null)
-                        return results;
+                        Pattern itemPattern = Pattern.compile("<item>(.*?)</item>", Pattern.DOTALL);
+                        Matcher itemMatcher = itemPattern.matcher(xml);
 
-                Pattern itemPattern = Pattern.compile("<item>(.*?)</item>", Pattern.DOTALL);
-                Matcher itemMatcher = itemPattern.matcher(xml);
+                        int count = 0;
+                        while (itemMatcher.find() && count < maxItems) {
+                                String item = itemMatcher.group(1);
+                                String title = extractXmlTag(item, "title");
+                                String link = extractXmlTag(item, "link");
+                                String pubDateStr = extractXmlTag(item, "pubDate");
 
-                int count = 0;
-                while (itemMatcher.find() && count < 10) {
-                        String item = itemMatcher.group(1);
+                                LocalDateTime pubDate = LocalDateTime.now();
+                                try {
+                                        if (!pubDateStr.isBlank()) {
+                                                pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
+                                                                .toLocalDateTime();
+                                        }
+                                } catch (Exception e) { /* ignorar fecha malformada */ }
 
-                        String title = extractXmlTag(item, "title");
-                        String link = extractXmlTag(item, "link");
-                        String pubDateStr = extractXmlTag(item, "pubDate");
-
-                        LocalDateTime pubDate = LocalDateTime.now();
-                        try {
-                                if (!pubDateStr.isBlank()) {
-                                        pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
-                                                        .toLocalDateTime();
+                                if (isSecurityRelated(title)) {
+                                        results.add(OsintResultDTO.builder()
+                                                        .title(title)
+                                                        .content(title)
+                                                        .sourceUrl(link)
+                                                        .sourceType(ReportSource.INSTITUTIONAL)
+                                                        .detectedLocation(city)
+                                                        .publishedAt(pubDate)
+                                                        .confidence(0.70)
+                                                        .build());
+                                        count++;
                                 }
-                        } catch (Exception e) {
                         }
-
-                        if (isSecurityRelated(title)) {
-                                results.add(OsintResultDTO.builder()
-                                                .title(title)
-                                                .content(title)
-                                                .sourceUrl(link)
-                                                .sourceType(ReportSource.INSTITUTIONAL)
-                                                .detectedLocation(city)
-                                                .publishedAt(pubDate)
-                                                .confidence(0.70)
-                                                .build());
-                                count++;
-                        }
+                } catch (Exception e) {
+                        log.warn("Error en Google News RSS (query={}): {}", query, e.getMessage());
                 }
-
                 return results;
         }
 
@@ -419,14 +462,39 @@ public class OsintService {
                 if (title == null || title.isBlank())
                         return false;
                 String lower = title.toLowerCase();
+
+                // ─── Lista negra: excluir términos políticos o mundanos ───
+                for (String blocked : POLITICAL_BLACKLIST) {
+                        if (lower.contains(blocked)) {
+                                log.debug("[OSINT] Excluido por lista negra ('{}'): {}", blocked, title);
+                                return false;
+                        }
+                }
+
+                // ─── Lista blanca: debe contener al menos un término de incidente ───
                 return lower.contains("robo") || lower.contains("hurto") || lower.contains("atraco")
                                 || lower.contains("accidente") || lower.contains("homicidio")
-                                || lower.contains("inseguridad") || lower.contains("policia")
-                                || lower.contains("captura") || lower.contains("delincuente")
-                                || lower.contains("asalto") || lower.contains("seguridad")
-                                || lower.contains("arma") || lower.contains("violencia")
-                                || lower.contains("emergencia") || lower.contains("incidente")
-                                || lower.contains("transito") || lower.contains("choque");
+                                || lower.contains("asalto") || lower.contains("violencia")
+                                || lower.contains("emergencia") || lower.contains("incendio")
+                                || lower.contains("herido") || lower.contains("muerto")
+                                || lower.contains("choque") || lower.contains("atropello")
+                                || lower.contains("derrumbe") || lower.contains("inundacion")
+                                || lower.contains("inundación") || lower.contains("explosion")
+                                || lower.contains("explosión") || lower.contains("fuga de gas");
+        }
+
+        /**
+         * Verifica si el texto menciona al menos un lugar físico identificable de Pasto.
+         * Usado EXCLUSIVAMENTE para filtrar resultados OSINT antes de crear reportes.
+         * Los reportes ciudadanos NO pasan por este filtro (tienen GPS o selección en mapa).
+         */
+        private boolean isLocatable(String text) {
+                if (text == null || text.isBlank()) return false;
+                String lower = text.toLowerCase();
+                for (String location : PASTO_LOCATIONS) {
+                        if (lower.contains(location)) return true;
+                }
+                return false;
         }
 
         /**
