@@ -16,6 +16,9 @@ public class EmailService {
     @Value("${app.frontend.url:http://localhost:5173}")
     private String frontendUrl;
 
+    @Value("${spring.mail.username:}")
+    private String mailFrom;
+
     // @Autowired(required = false) permite que la app arranque
     // aunque no haya SMTP configurado (MAIL_USERNAME / MAIL_PASSWORD vacíos).
     // En ese caso mailSender será null y el correo simplemente no se envía.
@@ -34,6 +37,7 @@ public class EmailService {
             SimpleMailMessage message = new SimpleMailMessage();
             String resetLink = frontendUrl + "/reset-password?token=" + token;
 
+            message.setFrom("SafeCity AI <" + mailFrom + ">");
             message.setTo(to);
             message.setSubject("SafeCity AI - Recuperación de contraseña");
             message.setText("Hola,\n\n" +
