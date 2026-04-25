@@ -54,6 +54,12 @@ public class User {
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "reset_token", length = 100)
+    private String resetToken;
+
+    @Column(name = "reset_token_expiry")
+    private LocalDateTime resetTokenExpiry;
+
     @OneToMany(mappedBy = "reportedBy", cascade = CascadeType.ALL)
     private List<Report> reports;
 }
