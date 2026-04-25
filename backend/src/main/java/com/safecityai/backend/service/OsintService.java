@@ -35,6 +35,7 @@ public class OsintService {
         private final ObjectMapper objectMapper;
         private final ReportRepository reportRepository;
         private final IAClassificationService iaService;
+        private final GeocodingService geocodingService;
 
         @Value("${app.rapidapi.key}")
         private String rapidApiKey;
@@ -43,11 +44,13 @@ public class OsintService {
         private String facebookHost;
 
         public OsintService(ReportRepository reportRepository,
-                        IAClassificationService iaService) {
+                        IAClassificationService iaService,
+                        GeocodingService geocodingService) {
                 this.restTemplate = new RestTemplate();
                 this.objectMapper = new ObjectMapper();
                 this.reportRepository = reportRepository;
                 this.iaService = iaService;
+                this.geocodingService = geocodingService;
         }
 
         // Paginas de Facebook prioritarias de Pasto (fuentes confiables locales)
@@ -109,14 +112,25 @@ public class OsintService {
                                         continue;
                                 }
 
+                                Double lat = osint.getLatitude();
+                                Double lng = osint.getLongitude();
+
+                                if ((lat == null || lng == null) && osint.getDetectedLocation() != null) {
+                                        double[] coords = geocodingService.geocode(osint.getDetectedLocation());
+                                        if (coords != null) {
+                                                lat = coords[0];
+                                                lng = coords[1];
+                                        }
+                                }
+
                                 // Crear el reporte en la BD
                                 Report report = Report.builder()
                                                 .description(osint.getContent())
                                                 .descriptionHash(contentHash)
                                                 .incidentType(IncidentType.OTHER)
                                                 .address(osint.getDetectedLocation())
-                                                .latitude(osint.getLatitude())
-                                                .longitude(osint.getLongitude())
+                                                .latitude(lat)
+                                                .longitude(lng)
                                                 .source(osint.getSourceType() != null
                                                                 ? osint.getSourceType()
                                                                 : ReportSource.SOCIAL_MEDIA)
@@ -292,6 +306,8 @@ public class OsintService {
                         String title = extractXmlTag(item, "title");
                         String link = extractXmlTag(item, "link");
                         String pubDateStr = extractXmlTag(item, "pubDate");
+                        String descriptionRaw = extractXmlTag(item, "description");
+                        String description = descriptionRaw.isBlank() ? title : descriptionRaw.replaceAll("<[^>]*>", "").trim();
 
                         LocalDateTime pubDate = LocalDateTime.now();
                         try {
@@ -305,7 +321,7 @@ public class OsintService {
                         if (isSecurityRelated(title)) {
                                 results.add(OsintResultDTO.builder()
                                                 .title(title)
-                                                .content(title)
+                                                .content(description)
                                                 .sourceUrl(link)
                                                 .sourceType(ReportSource.INSTITUTIONAL)
                                                 .detectedLocation(city)

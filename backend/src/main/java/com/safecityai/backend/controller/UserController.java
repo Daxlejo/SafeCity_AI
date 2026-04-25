@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -39,5 +40,20 @@ public class UserController {
     public ResponseEntity<UserResponseDTO> update(@PathVariable Long id,
                                                    @Valid @RequestBody UserRegisterDTO dto) {
         return ResponseEntity.ok(userService.updateProfile(id, dto));
+    }
+
+    // GET /api/v1/users/me → 200 OK
+    @GetMapping("/me")
+    public ResponseEntity<UserResponseDTO> getMyProfile() {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        return ResponseEntity.ok(userService.getProfile(email));
+    }
+
+    // PUT /api/v1/users/me → 200 OK
+    @PutMapping("/me")
+    public ResponseEntity<UserResponseDTO> updateMyProfile(@Valid @RequestBody UserRegisterDTO dto) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        UserResponseDTO profile = userService.getProfile(email);
+        return ResponseEntity.ok(userService.updateProfile(profile.getId(), dto));
     }
 }

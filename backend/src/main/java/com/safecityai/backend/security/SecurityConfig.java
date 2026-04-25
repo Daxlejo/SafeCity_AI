@@ -61,7 +61,7 @@ public class SecurityConfig {
                         // Endpoints públicos (sin token)
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers("/health", "/actuator/**").permitAll()
-                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
+                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/ws/**", "/ws-sockjs/**").permitAll()
                         // GET de reportes es público (el mapa lo necesita sin login)
                         .requestMatchers(HttpMethod.GET, "/api/v1/reports/**").permitAll()

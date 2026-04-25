@@ -1,6 +1,8 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.AuthResponseDTO;
+import com.safecityai.backend.dto.ForgotPasswordDTO;
+import com.safecityai.backend.dto.ResetPasswordDTO;
 import com.safecityai.backend.dto.UserLoginDTO;
 import com.safecityai.backend.dto.UserRegisterDTO;
 import com.safecityai.backend.dto.UserResponseDTO;
@@ -9,6 +11,8 @@ import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.UserRole;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.security.JwtService;
+import java.time.LocalDateTime;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -23,13 +27,52 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final EmailService emailService;
 
     public UserService(UserRepository userRepository,
             PasswordEncoder passwordEncoder,
-            JwtService jwtService) {
+            JwtService jwtService,
+            EmailService emailService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.emailService = emailService;
+    }
+
+    // Recuperar perfil por email
+    public UserResponseDTO getProfile(String email) {
+        User user = findByEmail(email);
+        return toResponseDTO(user);
+    }
+
+    // Solicitar recuperación de contraseña
+    @Transactional
+    public void forgotPassword(ForgotPasswordDTO dto) {
+        User user = userRepository.findByEmail(dto.getEmail())
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
+        
+        String token = UUID.randomUUID().toString();
+        user.setResetToken(token);
+        user.setResetTokenExpiry(LocalDateTime.now().plusMinutes(30));
+        userRepository.save(user);
+
+        emailService.sendPasswordResetEmail(user.getEmail(), token);
+    }
+
+    // Restablecer contraseña con token
+    @Transactional
+    public void resetPassword(ResetPasswordDTO dto) {
+        User user = userRepository.findByResetToken(dto.getToken())
+                .orElseThrow(() -> new IllegalArgumentException("Token inválido o expirado"));
+
+        if (user.getResetTokenExpiry().isBefore(LocalDateTime.now())) {
+            throw new IllegalArgumentException("El token ha expirado");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
+        user.setResetToken(null);
+        user.setResetTokenExpiry(null);
+        userRepository.save(user);
     }
 
     // Registrar nuevo usuario
