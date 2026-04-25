@@ -30,8 +30,11 @@ import org.springframework.web.client.RestTemplate;
 @Service
 public class GeocodingService {
 
-    private static final String NOMINATIM_URL =
+    private static final String NOMINATIM_REVERSE_URL =
             "https://nominatim.openstreetmap.org/reverse?lat=%s&lon=%s&format=json&addressdetails=1&accept-language=es";
+
+    private static final String NOMINATIM_SEARCH_URL =
+            "https://nominatim.openstreetmap.org/search?q=%s&format=json&limit=1&accept-language=es";
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -59,7 +62,7 @@ public class GeocodingService {
         }
 
         try {
-            String url = String.format(NOMINATIM_URL, lat, lng);
+            String url = String.format(NOMINATIM_REVERSE_URL, lat, lng);
 
             HttpHeaders headers = new HttpHeaders();
             // Nominatim REQUIERE un User-Agent descriptivo (política de uso)
@@ -108,5 +111,37 @@ public class GeocodingService {
 
     private String formatFallback(Double lat, Double lng) {
         return String.format("Zona %.4f, %.4f", lat, lng);
+    }
+
+    /**
+     * Convierte un texto a coordenadas (Geocoding).
+     * Retorna [latitud, longitud] o null si falla.
+     */
+    public double[] geocode(String address) {
+        if (address == null || address.isBlank()) return null;
+
+        try {
+            String url = String.format(NOMINATIM_SEARCH_URL, address.replace(" ", "+"));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("User-Agent", "SafeCityAI/1.0 (proyecto universitario)");
+            HttpEntity<Void> request = new HttpEntity<>(headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, request, String.class);
+
+            if (response.getBody() == null) return null;
+
+            JsonNode root = objectMapper.readTree(response.getBody());
+            if (root.isArray() && root.size() > 0) {
+                JsonNode first = root.get(0);
+                double lat = first.path("lat").asDouble();
+                double lon = first.path("lon").asDouble();
+                return new double[]{lat, lon};
+            }
+        } catch (Exception e) {
+            log.warn("[Geocoding] Error resolviendo '{}': {}", address, e.getMessage());
+        }
+        return null;
     }
 }

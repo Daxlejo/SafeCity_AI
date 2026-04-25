@@ -88,7 +88,7 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = new ErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Error interno del servidor",
-                "Ha ocurrido un error inesperado. Por favor intente más tarde."
+                ex.toString()
         );
 
         // En un entorno real, aquí logearías el error:
