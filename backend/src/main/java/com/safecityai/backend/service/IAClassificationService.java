@@ -57,6 +57,7 @@ public class IAClassificationService {
     // METODO PRINCIPAL: clasifica un reporte usando IA real
     // ═══════════════════════════════════════════════════════════════
 
+    @org.springframework.transaction.annotation.Transactional
     public IAClassificationDTO classifyReport(Long reportId) {
         Report report = reportRepository.findById(reportId)
                 .orElseThrow(() -> new com.safecityai.backend.exception.ResourceNotFoundException("Reporte", "id",

@@ -82,4 +82,9 @@ public class Report {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "zone_id")
     private Zone zone;
+
+    // Relación bidireccional para que al borrar un reporte, se borren sus notificaciones en cascada y evite bloqueos
+    @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    private java.util.List<Notification> notifications = new java.util.ArrayList<>();
 }
