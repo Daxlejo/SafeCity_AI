@@ -253,7 +253,7 @@ public class IAClassificationService {
         prompt.append("=== DATOS DEL REPORTE ===\n");
         prompt.append("- Descripción: \"").append(report.getDescription()).append("\"\n");
         prompt.append("- Categoría marcada: ").append(report.getIncidentType()).append("\n");
-        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ" : "NO").append("\n");
+        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ (ubicación verificada)" : "NO").append("\n");
         prompt.append("- Foto adjunta: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n");
 
         // Reputación del usuario
@@ -272,6 +272,26 @@ public class IAClassificationService {
         prompt.append("2. CATEGORÍA: Si la descripción no coincide con la categoría marcada, corrige 'suggestedType'.\n");
         prompt.append("   Categorías válidas: [ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER].\n\n");
 
+        prompt.append("=== DEFINICIÓN DE CATEGORÍAS ===\n");
+        prompt.append("- ROBBERY: robo, atraco, hurto, asalto a mano armada.\n");
+        prompt.append("- ACCIDENT: accidente de tránsito con heridos o daños.\n");
+        prompt.append("- TRAFFIC: congestión, bloqueo vial, mal estado de vías.\n");
+        prompt.append("- TRANSIT_OP: operativo policial, retén, cierre programado.\n");
+        prompt.append("- OTHER (USO RESTRINGIDO): SOLO para incendios, inundaciones, derrumbes, ");
+        prompt.append("fugas de gas, sismos, emergencias industriales o ambientales graves.\n");
+        prompt.append("  ⚠️ OTHER NO aplica para: peleas callejeras sin contexto, quejas de servicios, ");
+        prompt.append("ventas, eventos culturales, manifestaciones, política, o contenido mundano.\n\n");
+
+        prompt.append("=== RECHAZO AUTOMÁTICO (trustScore = 0) ===\n");
+        prompt.append("- Menciona figuras políticas (presidente, alcalde, Petro, gobernador, senador) como protagonistas del incidente.\n");
+        prompt.append("- El reporte es sobre un evento social, cultural o deportivo sin emergencia real.\n");
+        prompt.append("- La descripción es claramente ficticia, una broma o texto sin sentido.\n");
+        prompt.append("- El contenido es una queja de servicio público (agua, luz, gas) sin emergencia física.\n\n");
+
+        prompt.append("=== NOTA IMPORTANTE SOBRE UBICACIÓN ===\n");
+        prompt.append("Si el reporte tiene GPS (coordenadas verificadas), eso ES una ubicación válida, ");
+        prompt.append("aunque el texto no mencione una calle específica. No penalices por esto.\n\n");
+
         prompt.append("=== REGLAS DE PUNTUACIÓN ===\n");
         prompt.append("- Reporte con descripción coherente y seria: puntaje base 50.\n");
         prompt.append("- GPS proporcionado: +15 pts.\n");
@@ -279,7 +299,7 @@ public class IAClassificationService {
         prompt.append("- Foto adjunta: +15 pts.\n");
         prompt.append("- Usuario con reputación ALTA (>70%): +10 pts extra.\n");
         prompt.append("- Descripción muy vaga (<20 caracteres) pero coherente: -15 pts.\n");
-        prompt.append("- Reporte falso, broma obvia o texto sin sentido: trustScore = 0.\n\n");
+        prompt.append("- Contenido político, mundano, ficticio o broma obvia: trustScore = 0.\n\n");
 
         prompt.append("=== FORMATO DE RESPUESTA (JSON ÚNICAMENTE, SIN TEXTO ADICIONAL) ===\n");
         prompt.append("{\n");
