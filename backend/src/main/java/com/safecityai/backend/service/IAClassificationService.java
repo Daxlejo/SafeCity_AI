@@ -9,26 +9,26 @@ import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.UserRepository;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.RestTemplate;
-
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
- * Motor de IA para clasificar reportes y calcular trust score.
- * Flujo:
- * 1. Intenta clasificar con OpenRouter (Gemma 3 12B, gratis)
- * 2. Si OpenRouter falla → usa heuristica (reglas fijas) como respaldo
+ * Orquestador de Clasificación IA para reportes.
+ *
+ * Arquitectura (SOLID):
+ * ────────────────────
+ * - OpenRouterClient: HTTP + retry + caché (infraestructura)
+ * - ReportDecisionEngine: reglas de consenso (lógica de negocio)
+ * - IAClassificationService: orquestador (coordina flujo secuencial)
+ *
+ * Flujo secuencial inteligente:
+ * 1. Capa 1 (Gemma): filtro rápido
+ * 2. Evaluar confianza: si alta o baja → retornar sin Hermes
+ * 3. Capa 2 (Hermes): solo si Gemma está en zona gris
+ * 4. Consenso: combinar ambos resultados
  */
 @Slf4j
 @Service
@@ -38,8 +38,8 @@ public class IAClassificationService {
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final NotificationUserService notificationUserService;
-    private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
+    private final OpenRouterClient openRouterClient;
+    private final ReportDecisionEngine decisionEngine;
 
     // Puntos de reputación
     private static final double PENALTY_REJECTED = 5.0;  // -5 por reporte rechazado (score 0)
@@ -51,27 +51,18 @@ public class IAClassificationService {
     @Value("${app.openrouter.model:google/gemma-3-27b-it:free}")
     private String openRouterModel;
 
-    // ═══ Dual AI Ensemble — Modelos ═══
-    private static final String GEMMA_MODEL = "google/gemma-3-27b-it:free";
-    private static final String HERMES_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free";
-    private static final String FALLBACK_MODEL = "google/gemma-3-12b-it:free";
-
-    // ═══ Motor de Consenso — Umbrales ═══
-    private static final double DISCREPANCY_THRESHOLD = 30.0;
-    private static final int AI_TIMEOUT_SECONDS = 45;
-    private static final int MAX_RETRIES = 2;
-    private static final long RETRY_BASE_DELAY_MS = 2000;
-
     public IAClassificationService(ReportRepository reportRepository,
             UserRepository userRepository,
             NotificationService notificationService,
-            NotificationUserService notificationUserService) {
+            NotificationUserService notificationUserService,
+            OpenRouterClient openRouterClient,
+            ReportDecisionEngine decisionEngine) {
         this.reportRepository = reportRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.notificationUserService = notificationUserService;
-        this.restTemplate = new RestTemplate();
-        this.objectMapper = new ObjectMapper();
+        this.openRouterClient = openRouterClient;
+        this.decisionEngine = decisionEngine;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -267,174 +258,56 @@ public class IAClassificationService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // DUAL AI ENSEMBLE — Gemma 3 27B + Hermes 3 405B en paralelo
+    // PIPELINE IA SECUENCIAL (Gemma → evaluar → Hermes si es ambiguo)
     // ═══════════════════════════════════════════════════════════════
     //
-    // Patrón "Ensemble AI" con CompletableFuture:
-    // 1. Ambos modelos reciben el MISMO prompt en PARALELO
-    // 2. CompletableFuture.allOf() espera ambos (timeout 30s)
-    // 3. Motor de consenso aplica 3 reglas para decidir
+    // Flujo:
+    // 1. Gemma clasifica primero (Capa 1 — filtro rápido)
+    // 2. Si confianza ALTA (>85) o rechazo claro (<20) → retornamos
+    // 3. Si confianza AMBIGUA (20-85) → llamamos a Hermes (Capa 2)
+    // 4. Motor de consenso decide el veredicto final
     //
-    // Ventaja: latencia = max(Gemma, Hermes), NO Gemma + Hermes
-    // Fallback: si uno falla, el otro decide solo
+    // Ventaja vs paralelo: reduce llamadas API a la mitad en ~70% de casos
     //
 
     private IAClassificationDTO classifyWithAI(Report report) {
         String prompt = buildPrompt(report);
 
-        // Lanzar Gemma PRIMERO, Hermes 500ms DESPUÉS
-        // Stagger evita golpear el rate-limit de OpenRouter con 2 requests simultáneos
-        CompletableFuture<IAClassificationDTO> gemmaFuture =
-                CompletableFuture.supplyAsync(() -> callWithRetry(prompt, GEMMA_MODEL, report.getId(), "Gemma"));
-        CompletableFuture<IAClassificationDTO> hermesFuture =
-                CompletableFuture.supplyAsync(() -> {
-                    try { Thread.sleep(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                    return callWithRetry(prompt, HERMES_MODEL, report.getId(), "Hermes");
-                });
-
-        IAClassificationDTO gemmaResult = null;
-        IAClassificationDTO hermesResult = null;
-
+        // ═══ CAPA 1: Gemma (filtro rápido) ═══
+        IAClassificationDTO gemmaResult;
         try {
-            CompletableFuture.allOf(gemmaFuture, hermesFuture)
-                    .get(AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            gemmaResult = gemmaFuture.join();
-            hermesResult = hermesFuture.join();
+            gemmaResult = openRouterClient.classify(
+                    prompt, OpenRouterClient.GEMMA_MODEL, report.getId(), "Gemma");
+            log.info("[Pipeline] Capa 1 (Gemma) reporte #{}: score={}",
+                    report.getId(), gemmaResult.getTrustScore());
         } catch (Exception e) {
-            log.warn("[IA-Ensemble] Timeout o error en paralelo: {}", e.getMessage());
-            try { gemmaResult = gemmaFuture.getNow(null); } catch (Exception ignored) {}
-            try { hermesResult = hermesFuture.getNow(null); } catch (Exception ignored) {}
+            log.warn("[Pipeline] Gemma falló para reporte #{}: {}", report.getId(), e.getMessage());
+            throw e; // caerá a heurística en classifyReport()
         }
 
-        if (gemmaResult != null && hermesResult != null) {
-            log.info("[IA-Ensemble] Ambos modelos respondieron. Gemma={}, Hermes={}",
-                    gemmaResult.getTrustScore(), hermesResult.getTrustScore());
-            return applyConsensus(gemmaResult, hermesResult, report.getId());
-        } else if (gemmaResult != null) {
-            log.warn("[IA-Ensemble] Solo Gemma respondió (Hermes falló). Score: {}", gemmaResult.getTrustScore());
-            gemmaResult.setReasoning("[Solo Gemma] " + gemmaResult.getReasoning());
+        // ═══ PUNTO DE DECISIÓN: ¿necesitamos a Hermes? ═══
+        if (!decisionEngine.needsSecondOpinion(gemmaResult)) {
+            // Gemma es suficiente → retornamos sin gastar otra llamada API
+            gemmaResult.setReasoning("[Solo Gemma - Confianza clara] " + gemmaResult.getReasoning());
             return gemmaResult;
-        } else if (hermesResult != null) {
-            log.warn("[IA-Ensemble] Solo Hermes respondió (Gemma falló). Score: {}", hermesResult.getTrustScore());
-            hermesResult.setReasoning("[Solo Hermes] " + hermesResult.getReasoning());
-            return hermesResult;
-        } else {
-            throw new RuntimeException("Ambos modelos IA fallaron");
-        }
-    }
-
-    /**
-     * Llama a un modelo con RETRY + backoff exponencial ante 429/5xx.
-     * Intento 1: llamada directa
-     * Intento 2: espera 2s y reintenta
-     * Intento 3: espera 4s y reintenta
-     * Si todo falla: lanza excepción → ese modelo no participa en el consenso
-     */
-    private IAClassificationDTO callWithRetry(String prompt, String model, Long reportId, String label) {
-        Exception lastException = null;
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                if (attempt > 0) {
-                    long delay = RETRY_BASE_DELAY_MS * (1L << (attempt - 1)); // 2s, 4s
-                    log.info("[IA-{}] Reintento {}/{} para reporte #{} (esperando {}ms)",
-                            label, attempt, MAX_RETRIES, reportId, delay);
-                    Thread.sleep(delay);
-                }
-                log.info("[IA-{}] Clasificando reporte #{} (intento {})", label, reportId, attempt + 1);
-                long start = System.currentTimeMillis();
-                String response = doOpenRouterCall(prompt, model);
-                long elapsed = System.currentTimeMillis() - start;
-                log.info("[IA-{}] Respuesta en {}ms para reporte #{}", label, elapsed, reportId);
-                return parseOpenRouterResponse(response, reportId);
-            } catch (Exception e) {
-                lastException = e;
-                String msg = e.getMessage() != null ? e.getMessage() : "";
-                boolean isRetryable = msg.contains("429") || msg.contains("500")
-                        || msg.contains("502") || msg.contains("503") || msg.contains("rate");
-                if (!isRetryable || attempt == MAX_RETRIES) {
-                    log.error("[IA-{}] Error final clasificando reporte #{}: {}", label, reportId, msg);
-                    break;
-                }
-                log.warn("[IA-{}] Error transitorio reporte #{}: {} → reintentando", label, reportId, msg);
-            }
-        }
-        throw new RuntimeException("[" + label + "] Agotados " + (MAX_RETRIES + 1) + " intentos: " + lastException.getMessage(), lastException);
-    }
-
-    /**
-     * Motor de Consenso — 3 reglas para decidir el score final.
-     *
-     * Regla 1: Veto de Gemma (tiene visión, puede ver fotos)
-     *          Si Gemma = 0 → resultado = 0, punto.
-     *
-     * Regla 2: Discrepancia > 30 puntos → revisión humana
-     *          Algo ambiguo está pasando. No promediar, marcar PENDING.
-     *
-     * Regla 3: Score final = min(Gemma, Hermes)
-     *          Conservador: nunca inflas un reporte.
-     */
-    private IAClassificationDTO applyConsensus(
-            IAClassificationDTO gemma, IAClassificationDTO hermes, Long reportId) {
-
-        double gScore = gemma.getTrustScore();
-        double hScore = hermes.getTrustScore();
-        double diff = Math.abs(gScore - hScore);
-
-        // ═══ REGLA 1: Veto de Gemma es absoluto ═══
-        if (gScore == 0.0) {
-            log.info("[Consenso] Reporte #{} → VETO GEMMA (score=0). Hermes dijo {}. Rechazado.",
-                    reportId, hScore);
-            return IAClassificationDTO.builder()
-                    .reportId(reportId)
-                    .trustScore(0.0)
-                    .trustLevel(TrustLevel.UNTRUSTED)
-                    .suggestedType(gemma.getSuggestedType())
-                    .reasoning("[Consenso: Veto Gemma] " + gemma.getReasoning()
-                            + " | Hermes opinó: " + hermes.getReasoning())
-                    .shouldVerify(false)
-                    .build();
         }
 
-        // ═══ REGLA 2: Discrepancia → revisión humana ═══
-        if (diff > DISCREPANCY_THRESHOLD) {
-            double finalScore = Math.min(gScore, hScore);
-            log.info("[Consenso] Reporte #{} → DISCREPANCIA (G={}, H={}, diff={}). Score conservador: {}. → PENDING",
-                    reportId, gScore, hScore, diff, finalScore);
-
-            // Elegir tipo del modelo con score más alto (más seguro de su clasificación)
-            IncidentType chosenType = gScore >= hScore
-                    ? gemma.getSuggestedType() : hermes.getSuggestedType();
-
-            return IAClassificationDTO.builder()
-                    .reportId(reportId)
-                    .trustScore(finalScore)
-                    .trustLevel(scoreToLevel(finalScore))
-                    .suggestedType(chosenType)
-                    .reasoning(String.format(
-                            "[Consenso: Discrepancia %.0f pts] Gemma (%.0f): %s | Hermes (%.0f): %s",
-                            diff, gScore, gemma.getReasoning(), hScore, hermes.getReasoning()))
-                    .shouldVerify(false) // queda PENDING, NO auto-verificar
-                    .build();
+        // ═══ CAPA 2: Hermes (solo si Gemma duda) ═══
+        IAClassificationDTO hermesResult;
+        try {
+            hermesResult = openRouterClient.classify(
+                    prompt, OpenRouterClient.HERMES_MODEL, report.getId(), "Hermes");
+            log.info("[Pipeline] Capa 2 (Hermes) reporte #{}: score={}",
+                    report.getId(), hermesResult.getTrustScore());
+        } catch (Exception e) {
+            log.warn("[Pipeline] Hermes falló para reporte #{}: {}. Usando solo Gemma.",
+                    report.getId(), e.getMessage());
+            gemmaResult.setReasoning("[Solo Gemma - Hermes no disponible] " + gemmaResult.getReasoning());
+            return gemmaResult;
         }
 
-        // ═══ REGLA 3: Consenso → score = min(G, H) ═══
-        double finalScore = Math.min(gScore, hScore);
-        IncidentType chosenType = gScore <= hScore
-                ? gemma.getSuggestedType() : hermes.getSuggestedType();
-
-        log.info("[Consenso] Reporte #{} → CONSENSO (G={}, H={}, final={})",
-                reportId, gScore, hScore, finalScore);
-
-        return IAClassificationDTO.builder()
-                .reportId(reportId)
-                .trustScore(finalScore)
-                .trustLevel(scoreToLevel(finalScore))
-                .suggestedType(chosenType)
-                .reasoning(String.format(
-                        "[Consenso IA Dual] Gemma (%.0f): %s | Hermes (%.0f): %s",
-                        gScore, gemma.getReasoning(), hScore, hermes.getReasoning()))
-                .shouldVerify(finalScore >= 70.0)
-                .build();
+        // ═══ CONSENSO: combinar ambos resultados ═══
+        return decisionEngine.applyConsensus(gemmaResult, hermesResult, report.getId());
     }
 
     private String buildPrompt(Report report) {
@@ -528,91 +401,6 @@ public class IAClassificationService {
         return prompt.toString();
     }
 
-    /**
-     * Hace la petición HTTP a OpenRouter con RETRY y FALLBACK.
-     *
-     * Estrategia anti-rate-limit:
-     * 1. Intenta con el modelo principal (Gemma 3 12B)
-     * 2. Si da 429 → espera 3 seg → reintenta
-     * 3. Si sigue fallando → prueba con modelo alternativo (Llama 3.2 3B)
-     * 4. Si todo falla → lanza excepción → cae a la heurística
-     */
-    // El método callOpenRouterAPI ya no se usa directamente — callAndParse llama a doOpenRouterCall
-    // Se mantiene solo por compatibilidad con classifyReport() síncrono
-    private String callOpenRouterAPI(String prompt) {
-        return doOpenRouterCall(prompt, GEMMA_MODEL);
-    }
-
-    private String doOpenRouterCall(String prompt, String model) {
-        String url = "https://openrouter.ai/api/v1/chat/completions";
-
-        Map<String, Object> body = Map.of(
-                "model", model,
-                "messages", List.of(
-                        Map.of("role", "user", "content", prompt)),
-                "temperature", 0.3,
-                "max_tokens", 500);
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(openRouterApiKey);
-        headers.set("HTTP-Referer", "https://safecityai.onrender.com");
-        headers.set("X-Title", "SafeCity AI");
-
-        HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-
-        ResponseEntity<String> response = restTemplate.exchange(
-                url, HttpMethod.POST, request, String.class);
-
-        log.info("[IA] Respuesta exitosa de OpenRouter usando modelo: {}", model);
-        return response.getBody();
-    }
-
-    /**
-     * Parsea la respuesta de OpenRouter (formato OpenAI).
-     * Estructura: { "choices": [{ "message": { "content": "{ JSON }" } }] }
-     */
-    private IAClassificationDTO parseOpenRouterResponse(String responseBody, Long reportId) {
-        try {
-            JsonNode root = objectMapper.readTree(responseBody);
-
-            String generatedText = root
-                    .path("choices").get(0)
-                    .path("message")
-                    .path("content").asText();
-
-            generatedText = generatedText
-                    .replace("```json", "")
-                    .replace("```", "")
-                    .trim();
-
-            JsonNode classification = objectMapper.readTree(generatedText);
-
-            double trustScore = classification.path("trustScore").asDouble(50.0);
-            String suggestedTypeStr = classification.path("suggestedType").asText("OTHER");
-            String reasoning = classification.path("reasoning").asText("Sin razonamiento disponible");
-            boolean shouldVerify = classification.path("shouldVerify").asBoolean(true);
-
-            IncidentType suggestedType;
-            try {
-                suggestedType = IncidentType.valueOf(suggestedTypeStr);
-            } catch (IllegalArgumentException e) {
-                suggestedType = IncidentType.OTHER;
-            }
-
-            return IAClassificationDTO.builder()
-                    .reportId(reportId)
-                    .trustScore(trustScore)
-                    .trustLevel(scoreToLevel(trustScore))
-                    .suggestedType(suggestedType)
-                    .reasoning("[IA OpenRouter] " + reasoning)
-                    .shouldVerify(shouldVerify)
-                    .build();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Error parseando respuesta de OpenRouter: " + e.getMessage(), e);
-        }
-    }
 
     // ═══════════════════════════════════════════════════════════════
     // FASE 1 (FALLBACK): Clasificacion con reglas fijas
