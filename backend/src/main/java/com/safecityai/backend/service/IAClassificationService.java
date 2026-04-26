@@ -21,6 +21,8 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Motor de IA para clasificar reportes y calcular trust score.
@@ -46,8 +48,17 @@ public class IAClassificationService {
     @Value("${app.openrouter.api-key}")
     private String openRouterApiKey;
 
-    @Value("${app.openrouter.model:openai/gpt-oss-120b:free}")
+    @Value("${app.openrouter.model:google/gemma-3-27b-it:free}")
     private String openRouterModel;
+
+    // ═══ Dual AI Ensemble — Modelos ═══
+    private static final String GEMMA_MODEL = "google/gemma-3-27b-it:free";
+    private static final String HERMES_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free";
+    private static final String FALLBACK_MODEL = "google/gemma-3-12b-it:free";
+
+    // ═══ Motor de Consenso — Umbrales ═══
+    private static final double DISCREPANCY_THRESHOLD = 30.0;
+    private static final int AI_TIMEOUT_SECONDS = 30;
 
     public IAClassificationService(ReportRepository reportRepository,
             UserRepository userRepository,
@@ -146,9 +157,9 @@ public class IAClassificationService {
             // 5. AUTO-VERIFICAR o AUTO-ELIMINAR basado en el trustScore
             User reportOwner = report.getReportedBy();
 
-            if (result.getTrustScore() >= 60.0) {
+            if (result.getTrustScore() >= 60.0 && result.getShouldVerify()) {
                 report.setStatus(ReportStatus.VERIFIED);
-                log.info("[IA-Async] Reporte {} auto-verificado (score: {})",
+                log.info("[IA-Async] Reporte {} auto-verificado (score: {}, shouldVerify: true)",
                         reportId, result.getTrustScore());
                 reportRepository.save(report);
 
@@ -252,22 +263,153 @@ public class IAClassificationService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // CLASIFICACIÓN CON IA REAL (OpenRouter — Gemma 3 12B)
+    // DUAL AI ENSEMBLE — Gemma 3 27B + Hermes 3 405B en paralelo
     // ═══════════════════════════════════════════════════════════════
     //
-    // OpenRouter es un servicio que da acceso GRATIS a modelos de IA
-    // como Google Gemma 3 12B (12 mil millones de parámetros).
+    // Patrón "Ensemble AI" con CompletableFuture:
+    // 1. Ambos modelos reciben el MISMO prompt en PARALELO
+    // 2. CompletableFuture.allOf() espera ambos (timeout 30s)
+    // 3. Motor de consenso aplica 3 reglas para decidir
     //
-    // API compatible con OpenAI → usa /chat/completions
-    // Diferencia clave vs Gemini:
-    // - Gemini: POST .../generateContent + body { contents: [...] }
-    // - OpenRouter: POST .../chat/completions + body { messages: [...] }
+    // Ventaja: latencia = max(Gemma, Hermes), NO Gemma + Hermes
+    // Fallback: si uno falla, el otro decide solo
     //
 
     private IAClassificationDTO classifyWithAI(Report report) {
         String prompt = buildPrompt(report);
-        String aiResponse = callOpenRouterAPI(prompt);
-        return parseOpenRouterResponse(aiResponse, report.getId());
+
+        // Lanzar ambos modelos EN PARALELO
+        CompletableFuture<IAClassificationDTO> gemmaFuture =
+                CompletableFuture.supplyAsync(() -> callAndParse(prompt, GEMMA_MODEL, report.getId(), "Gemma"));
+        CompletableFuture<IAClassificationDTO> hermesFuture =
+                CompletableFuture.supplyAsync(() -> callAndParse(prompt, HERMES_MODEL, report.getId(), "Hermes"));
+
+        IAClassificationDTO gemmaResult = null;
+        IAClassificationDTO hermesResult = null;
+
+        try {
+            // Esperar ambos con timeout
+            CompletableFuture.allOf(gemmaFuture, hermesFuture)
+                    .get(AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            gemmaResult = gemmaFuture.join();
+            hermesResult = hermesFuture.join();
+        } catch (Exception e) {
+            // Al menos uno falló — recuperar lo que se pueda
+            log.warn("[IA-Ensemble] Timeout o error en paralelo: {}", e.getMessage());
+            try { gemmaResult = gemmaFuture.getNow(null); } catch (Exception ignored) {}
+            try { hermesResult = hermesFuture.getNow(null); } catch (Exception ignored) {}
+        }
+
+        // ¿Tenemos resultados?
+        if (gemmaResult != null && hermesResult != null) {
+            log.info("[IA-Ensemble] Ambos modelos respondieron. Gemma={}, Hermes={}",
+                    gemmaResult.getTrustScore(), hermesResult.getTrustScore());
+            return applyConsensus(gemmaResult, hermesResult, report.getId());
+        } else if (gemmaResult != null) {
+            log.warn("[IA-Ensemble] Solo Gemma respondió (Hermes falló). Score: {}", gemmaResult.getTrustScore());
+            gemmaResult.setReasoning("[Solo Gemma] " + gemmaResult.getReasoning());
+            return gemmaResult;
+        } else if (hermesResult != null) {
+            log.warn("[IA-Ensemble] Solo Hermes respondió (Gemma falló). Score: {}", hermesResult.getTrustScore());
+            hermesResult.setReasoning("[Solo Hermes] " + hermesResult.getReasoning());
+            return hermesResult;
+        } else {
+            throw new RuntimeException("Ambos modelos IA fallaron");
+        }
+    }
+
+    /**
+     * Llama a un modelo y parsea su respuesta.
+     * Método separado para poder ejecutar en CompletableFuture.supplyAsync().
+     */
+    private IAClassificationDTO callAndParse(String prompt, String model, Long reportId, String label) {
+        try {
+            log.info("[IA-{}] Iniciando clasificación reporte #{}", label, reportId);
+            long start = System.currentTimeMillis();
+            String response = doOpenRouterCall(prompt, model);
+            long elapsed = System.currentTimeMillis() - start;
+            log.info("[IA-{}] Respuesta en {}ms para reporte #{}", label, elapsed, reportId);
+            return parseOpenRouterResponse(response, reportId);
+        } catch (Exception e) {
+            log.error("[IA-{}] Error clasificando reporte #{}: {}", label, reportId, e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * Motor de Consenso — 3 reglas para decidir el score final.
+     *
+     * Regla 1: Veto de Gemma (tiene visión, puede ver fotos)
+     *          Si Gemma = 0 → resultado = 0, punto.
+     *
+     * Regla 2: Discrepancia > 30 puntos → revisión humana
+     *          Algo ambiguo está pasando. No promediar, marcar PENDING.
+     *
+     * Regla 3: Score final = min(Gemma, Hermes)
+     *          Conservador: nunca inflas un reporte.
+     */
+    private IAClassificationDTO applyConsensus(
+            IAClassificationDTO gemma, IAClassificationDTO hermes, Long reportId) {
+
+        double gScore = gemma.getTrustScore();
+        double hScore = hermes.getTrustScore();
+        double diff = Math.abs(gScore - hScore);
+
+        // ═══ REGLA 1: Veto de Gemma es absoluto ═══
+        if (gScore == 0.0) {
+            log.info("[Consenso] Reporte #{} → VETO GEMMA (score=0). Hermes dijo {}. Rechazado.",
+                    reportId, hScore);
+            return IAClassificationDTO.builder()
+                    .reportId(reportId)
+                    .trustScore(0.0)
+                    .trustLevel(TrustLevel.UNTRUSTED)
+                    .suggestedType(gemma.getSuggestedType())
+                    .reasoning("[Consenso: Veto Gemma] " + gemma.getReasoning()
+                            + " | Hermes opinó: " + hermes.getReasoning())
+                    .shouldVerify(false)
+                    .build();
+        }
+
+        // ═══ REGLA 2: Discrepancia → revisión humana ═══
+        if (diff > DISCREPANCY_THRESHOLD) {
+            double finalScore = Math.min(gScore, hScore);
+            log.info("[Consenso] Reporte #{} → DISCREPANCIA (G={}, H={}, diff={}). Score conservador: {}. → PENDING",
+                    reportId, gScore, hScore, diff, finalScore);
+
+            // Elegir tipo del modelo con score más alto (más seguro de su clasificación)
+            IncidentType chosenType = gScore >= hScore
+                    ? gemma.getSuggestedType() : hermes.getSuggestedType();
+
+            return IAClassificationDTO.builder()
+                    .reportId(reportId)
+                    .trustScore(finalScore)
+                    .trustLevel(scoreToLevel(finalScore))
+                    .suggestedType(chosenType)
+                    .reasoning(String.format(
+                            "[Consenso: Discrepancia %.0f pts] Gemma (%.0f): %s | Hermes (%.0f): %s",
+                            diff, gScore, gemma.getReasoning(), hScore, hermes.getReasoning()))
+                    .shouldVerify(false) // queda PENDING, NO auto-verificar
+                    .build();
+        }
+
+        // ═══ REGLA 3: Consenso → score = min(G, H) ═══
+        double finalScore = Math.min(gScore, hScore);
+        IncidentType chosenType = gScore <= hScore
+                ? gemma.getSuggestedType() : hermes.getSuggestedType();
+
+        log.info("[Consenso] Reporte #{} → CONSENSO (G={}, H={}, final={})",
+                reportId, gScore, hScore, finalScore);
+
+        return IAClassificationDTO.builder()
+                .reportId(reportId)
+                .trustScore(finalScore)
+                .trustLevel(scoreToLevel(finalScore))
+                .suggestedType(chosenType)
+                .reasoning(String.format(
+                        "[Consenso IA Dual] Gemma (%.0f): %s | Hermes (%.0f): %s",
+                        gScore, gemma.getReasoning(), hScore, hermes.getReasoning()))
+                .shouldVerify(finalScore >= 70.0)
+                .build();
     }
 
     private String buildPrompt(Report report) {
@@ -356,40 +498,10 @@ public class IAClassificationService {
      * 3. Si sigue fallando → prueba con modelo alternativo (Llama 3.2 3B)
      * 4. Si todo falla → lanza excepción → cae a la heurística
      */
-    private static final String FALLBACK_MODEL = "google/gemma-3-12b-it:free";
-    private static final int RETRY_DELAY_MS = 3000;
-
+    // El método callOpenRouterAPI ya no se usa directamente — callAndParse llama a doOpenRouterCall
+    // Se mantiene solo por compatibilidad con classifyReport() síncrono
     private String callOpenRouterAPI(String prompt) {
-        // Intento 1: modelo principal
-        try {
-            return doOpenRouterCall(prompt, openRouterModel);
-        } catch (Exception e1) {
-            if (!e1.getMessage().contains("429"))
-                throw e1;
-
-            log.info("[IA] Modelo {} rate-limited, reintentando en {}ms...",
-                    openRouterModel, RETRY_DELAY_MS);
-        }
-
-        // Esperar antes de reintentar
-        try {
-            Thread.sleep(RETRY_DELAY_MS);
-        } catch (InterruptedException ignored) {
-        }
-
-        // Intento 2: mismo modelo después de esperar
-        try {
-            return doOpenRouterCall(prompt, openRouterModel);
-        } catch (Exception e2) {
-            if (!e2.getMessage().contains("429"))
-                throw e2;
-
-            log.info("[IA] Modelo {} sigue rate-limited, probando fallback: {}",
-                    openRouterModel, FALLBACK_MODEL);
-        }
-
-        // Intento 3: modelo alternativo (Llama 3.2 3B)
-        return doOpenRouterCall(prompt, FALLBACK_MODEL);
+        return doOpenRouterCall(prompt, GEMMA_MODEL);
     }
 
     private String doOpenRouterCall(String prompt, String model) {

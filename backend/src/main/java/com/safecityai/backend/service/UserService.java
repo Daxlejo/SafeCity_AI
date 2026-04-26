@@ -1,6 +1,7 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.AuthResponseDTO;
+import com.safecityai.backend.dto.ChangePasswordDTO;
 import com.safecityai.backend.dto.ForgotPasswordDTO;
 import com.safecityai.backend.dto.ResetPasswordDTO;
 import com.safecityai.backend.dto.UserLoginDTO;
@@ -164,6 +165,19 @@ public class UserService {
         }
 
         return toResponseDTO(userRepository.save(user));
+    }
+
+    // Cambiar contraseña validando la actual
+    @Transactional
+    public void changePassword(String email, ChangePasswordDTO dto) {
+        User user = findByEmail(email);
+
+        if (!passwordEncoder.matches(dto.getCurrentPassword(), user.getPasswordHash())) {
+            throw new IllegalArgumentException("La contraseña actual es incorrecta");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(dto.getNewPassword()));
+        userRepository.save(user);
     }
 
     // ═══════════════ ADMIN ACTIONS ═══════════════
