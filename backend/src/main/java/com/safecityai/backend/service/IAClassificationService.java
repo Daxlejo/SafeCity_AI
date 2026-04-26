@@ -58,7 +58,9 @@ public class IAClassificationService {
 
     // ═══ Motor de Consenso — Umbrales ═══
     private static final double DISCREPANCY_THRESHOLD = 30.0;
-    private static final int AI_TIMEOUT_SECONDS = 30;
+    private static final int AI_TIMEOUT_SECONDS = 45;
+    private static final int MAX_RETRIES = 2;
+    private static final long RETRY_BASE_DELAY_MS = 2000;
 
     public IAClassificationService(ReportRepository reportRepository,
             UserRepository userRepository,
@@ -280,29 +282,30 @@ public class IAClassificationService {
     private IAClassificationDTO classifyWithAI(Report report) {
         String prompt = buildPrompt(report);
 
-        // Lanzar ambos modelos EN PARALELO
+        // Lanzar Gemma PRIMERO, Hermes 500ms DESPUÉS
+        // Stagger evita golpear el rate-limit de OpenRouter con 2 requests simultáneos
         CompletableFuture<IAClassificationDTO> gemmaFuture =
-                CompletableFuture.supplyAsync(() -> callAndParse(prompt, GEMMA_MODEL, report.getId(), "Gemma"));
+                CompletableFuture.supplyAsync(() -> callWithRetry(prompt, GEMMA_MODEL, report.getId(), "Gemma"));
         CompletableFuture<IAClassificationDTO> hermesFuture =
-                CompletableFuture.supplyAsync(() -> callAndParse(prompt, HERMES_MODEL, report.getId(), "Hermes"));
+                CompletableFuture.supplyAsync(() -> {
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    return callWithRetry(prompt, HERMES_MODEL, report.getId(), "Hermes");
+                });
 
         IAClassificationDTO gemmaResult = null;
         IAClassificationDTO hermesResult = null;
 
         try {
-            // Esperar ambos con timeout
             CompletableFuture.allOf(gemmaFuture, hermesFuture)
                     .get(AI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             gemmaResult = gemmaFuture.join();
             hermesResult = hermesFuture.join();
         } catch (Exception e) {
-            // Al menos uno falló — recuperar lo que se pueda
             log.warn("[IA-Ensemble] Timeout o error en paralelo: {}", e.getMessage());
             try { gemmaResult = gemmaFuture.getNow(null); } catch (Exception ignored) {}
             try { hermesResult = hermesFuture.getNow(null); } catch (Exception ignored) {}
         }
 
-        // ¿Tenemos resultados?
         if (gemmaResult != null && hermesResult != null) {
             log.info("[IA-Ensemble] Ambos modelos respondieron. Gemma={}, Hermes={}",
                     gemmaResult.getTrustScore(), hermesResult.getTrustScore());
@@ -321,21 +324,41 @@ public class IAClassificationService {
     }
 
     /**
-     * Llama a un modelo y parsea su respuesta.
-     * Método separado para poder ejecutar en CompletableFuture.supplyAsync().
+     * Llama a un modelo con RETRY + backoff exponencial ante 429/5xx.
+     * Intento 1: llamada directa
+     * Intento 2: espera 2s y reintenta
+     * Intento 3: espera 4s y reintenta
+     * Si todo falla: lanza excepción → ese modelo no participa en el consenso
      */
-    private IAClassificationDTO callAndParse(String prompt, String model, Long reportId, String label) {
-        try {
-            log.info("[IA-{}] Iniciando clasificación reporte #{}", label, reportId);
-            long start = System.currentTimeMillis();
-            String response = doOpenRouterCall(prompt, model);
-            long elapsed = System.currentTimeMillis() - start;
-            log.info("[IA-{}] Respuesta en {}ms para reporte #{}", label, elapsed, reportId);
-            return parseOpenRouterResponse(response, reportId);
-        } catch (Exception e) {
-            log.error("[IA-{}] Error clasificando reporte #{}: {}", label, reportId, e.getMessage());
-            throw e;
+    private IAClassificationDTO callWithRetry(String prompt, String model, Long reportId, String label) {
+        Exception lastException = null;
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                if (attempt > 0) {
+                    long delay = RETRY_BASE_DELAY_MS * (1L << (attempt - 1)); // 2s, 4s
+                    log.info("[IA-{}] Reintento {}/{} para reporte #{} (esperando {}ms)",
+                            label, attempt, MAX_RETRIES, reportId, delay);
+                    Thread.sleep(delay);
+                }
+                log.info("[IA-{}] Clasificando reporte #{} (intento {})", label, reportId, attempt + 1);
+                long start = System.currentTimeMillis();
+                String response = doOpenRouterCall(prompt, model);
+                long elapsed = System.currentTimeMillis() - start;
+                log.info("[IA-{}] Respuesta en {}ms para reporte #{}", label, elapsed, reportId);
+                return parseOpenRouterResponse(response, reportId);
+            } catch (Exception e) {
+                lastException = e;
+                String msg = e.getMessage() != null ? e.getMessage() : "";
+                boolean isRetryable = msg.contains("429") || msg.contains("500")
+                        || msg.contains("502") || msg.contains("503") || msg.contains("rate");
+                if (!isRetryable || attempt == MAX_RETRIES) {
+                    log.error("[IA-{}] Error final clasificando reporte #{}: {}", label, reportId, msg);
+                    break;
+                }
+                log.warn("[IA-{}] Error transitorio reporte #{}: {} → reintentando", label, reportId, msg);
+            }
         }
+        throw new RuntimeException("[" + label + "] Agotados " + (MAX_RETRIES + 1) + " intentos: " + lastException.getMessage(), lastException);
     }
 
     /**
@@ -810,6 +833,26 @@ public class IAClassificationService {
         for (String p : political) {
             if (lower.contains(p))
                 return "Contenido político: '" + p + "'";
+        }
+        // Exageraciones absurdas
+        String[] exaggerations = {
+                "mil personas", "mil muertos", "cien muertos", "miles de personas",
+                "todo el barrio", "todos me persiguen", "nadie sobrevivió",
+                "explosión nuclear", "bomba atómica", "fin del mundo"
+        };
+        for (String ex : exaggerations) {
+            if (lower.contains(ex))
+                return "Exageración absurda: '" + ex + "'";
+        }
+
+        // Rumores de segunda mano (sin presencia directa)
+        String[] rumors = {
+                "me dijeron que", "dicen que", "me contaron que",
+                "escuché que", "parece que hubo", "creo que vi"
+        };
+        for (String r : rumors) {
+            if (lower.contains(r))
+                return "Rumor de segunda mano: '" + r + "'";
         }
 
         return null; // contenido válido
