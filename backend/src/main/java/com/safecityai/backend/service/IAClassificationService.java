@@ -449,12 +449,26 @@ public class IAClassificationService {
                 "- Jerga de internet o burla: 'jajaja', 'xd', 'lol', 'lmao', 'me cayó el veinte', emojis de risa.\n");
         prompt.append(
                 "- Imposibilidades físicas: 'mil muertos', 'el bus explotó y nadie murió', exageraciones absurdas.\n");
+        prompt.append("- Objetos absurdos o armas imposibles: 'cuchillo de goma', 'pistola de papel', ");
+        prompt.append("'espada de cartón', 'bala de algodón', o cualquier arma/objeto que NO existe en la realidad.\n");
         prompt.append("- Insultos, groserías o texto incoherente.\n");
         prompt.append("- Queja de servicios públicos: agua, luz, internet, basuras, baches.\n");
-        prompt.append("- Contenido político o de opinión personal.\n\n");
+        prompt.append("- Contenido político o de opinión personal.\n");
+        prompt.append("- Contenido xenófobo, racista o discriminatorio: reportes que mencionan ");
+        prompt.append("nacionalidades, etnias o grupos sociales como causa del problema. ");
+        prompt.append("Ejemplo: 'peleas entre venezolanos y ecuatorianos', 'los [nacionalidad] causan problemas'. ");
+        prompt.append("SafeCity NO es plataforma para discurso de odio.\n");
+        prompt.append("- Violencia generalizada sin detalles útiles: reportes como 'peleas en el barrio', ");
+        prompt.append("'hay problemas aquí', 'inseguridad total'. Un reporte válido DEBE tener: ");
+        prompt.append("qué pasó específicamente, a quién afectó, y dónde exactamente.\n\n");
         prompt.append("REGLA CRÍTICA DE FASE 1: La presencia de GPS, foto o cuenta verificada NO rescata ");
         prompt.append("un reporte que dispara este filtro. Un reporte con GPS que dice ");
         prompt.append("'la mano peluda me robó' SIEMPRE es trustScore=0.\n\n");
+        prompt.append("EJEMPLOS de reportes que DEBEN ser rechazados (trustScore=0):\n");
+        prompt.append("- 'Peleas entre ecuatorianos y venezolanos' → xenófobo + sin detalles\n");
+        prompt.append("- 'Robo con cuchillo de goma' → arma absurda, probable broma\n");
+        prompt.append("- 'Hay mucha inseguridad por aquí' → demasiado vago, sin incidente específico\n");
+        prompt.append("- 'Me dijeron que robaron a alguien' → rumor de segunda mano\n\n");
 
         // --- FASE 2: PUNTUACIÓN ---
         prompt.append("=== FASE 2: PUNTUACIÓN (solo si el reporte pasó FASE 1 limpiamente) ===\n");
