@@ -13,6 +13,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Slf4j
 @Service
@@ -61,9 +63,16 @@ public class ReportService {
 
         // ═══════════════ IA: CLASIFICAR EN BACKGROUND (ASYNC) ═══════════════
         // classifyAsync() corre en otro hilo (Thread Pool "iaExecutor")
-        // El usuario recibe respuesta INMEDIATA, la IA trabaja en background
-        // Si falla, el reporte queda PENDING para revisión manual
-        iaClassificationService.classifyAsync(savedReport.getId());
+        // IMPORTANTE: Registramos la llamada para DESPUÉS del commit de la transacción.
+        // Si llamamos classifyAsync() directamente aquí, el @Async corre en otro hilo
+        // pero la transacción de createReport AÚN NO ha hecho commit → "Reporte no encontrado".
+        final Long newReportId = savedReport.getId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                iaClassificationService.classifyAsync(newReportId);
+            }
+        });
 
         log.info("Reporte creado exitosamente con ID: {}", savedReport.getId());
         return response;
