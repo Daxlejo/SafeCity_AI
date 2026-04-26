@@ -41,9 +41,12 @@ public class OpenRouterClient {
     @Value("${app.openrouter.api-key}")
     private String apiKey;
 
-    // ═══ Modelos de IA disponibles ═══
-    public static final String GEMMA_MODEL = "google/gemma-3-27b-it:free";
-    public static final String HERMES_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free";
+    // ═══ Modelos de IA disponibles (actualizados 26-Abr-2026) ═══
+    // Capa 1: Filtro rápido — NVIDIA Nemotron Super 120B (1.2s promedio)
+    // Capa 2: Verificador  — OpenAI GPT-OSS 120B (2.2s promedio)
+    // Nota: Gemma/Hermes estaban dando 429 por congestión del tier gratuito
+    public static final String GEMMA_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+    public static final String HERMES_MODEL = "openai/gpt-oss-120b:free";
 
     // ═══ Constantes de Retry ═══
     private static final int MAX_RETRIES = 2;
