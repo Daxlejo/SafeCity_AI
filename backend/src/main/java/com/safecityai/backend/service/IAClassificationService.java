@@ -8,6 +8,7 @@ import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.safecityai.backend.repository.ReportRepository;
+import com.safecityai.backend.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -32,10 +33,15 @@ import java.util.Map;
 public class IAClassificationService {
 
     private final ReportRepository reportRepository;
+    private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final NotificationUserService notificationUserService;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+
+    // Puntos de reputación
+    private static final double PENALTY_REJECTED = 5.0;  // -5 por reporte rechazado (score 0)
+    private static final double BONUS_VERIFIED = 2.0;    // +2 por reporte verificado (score ≥ 60)
 
     @Value("${app.openrouter.api-key}")
     private String openRouterApiKey;
@@ -44,9 +50,11 @@ public class IAClassificationService {
     private String openRouterModel;
 
     public IAClassificationService(ReportRepository reportRepository,
+            UserRepository userRepository,
             NotificationService notificationService,
             NotificationUserService notificationUserService) {
         this.reportRepository = reportRepository;
+        this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.notificationUserService = notificationUserService;
         this.restTemplate = new RestTemplate();
@@ -148,32 +156,37 @@ public class IAClassificationService {
                 ReportResponseDTO dto = convertToDTO(report);
                 notificationService.notifyReportUpdated(dto);
 
-                // Notificación persistente al usuario
+                // BONUS: recompensar al usuario por buen reporte (+2 trustLevel)
                 if (reportOwner != null) {
+                    adjustTrustLevel(reportOwner, BONUS_VERIFIED);
+                    String msg;
                     if (typeChanged) {
+                        msg = "Tu reporte #" + reportId + " fue aceptado pero se reclasificó de "
+                                + originalType + " a " + result.getSuggestedType()
+                                + ". +" + (int) BONUS_VERIFIED + " puntos de reputación.";
                         notificationUserService.createNotification(
-                                reportOwner, report,
-                                "Reporte reclasificado",
-                                "Tu reporte #" + reportId + " fue aceptado pero se reclasificó de "
-                                        + originalType + " a " + result.getSuggestedType() + ".",
-                                "WARNING");
+                                reportOwner, report, "Reporte reclasificado", msg, "WARNING");
                     } else {
+                        msg = "Tu reporte #" + reportId + " fue verificado exitosamente. +"
+                                + (int) BONUS_VERIFIED + " puntos de reputación.";
                         notificationUserService.createNotification(
-                                reportOwner, report,
-                                "Reporte verificado",
-                                "Tu reporte #" + reportId + " fue verificado exitosamente por la IA.",
-                                "INFO");
+                                reportOwner, report, "Reporte verificado ✅", msg, "INFO");
                     }
                 }
 
             } else if (result.getTrustScore() == 0.0) {
-                // Notificación ANTES de eliminar (necesitamos la referencia al report)
+                // PENALIZACIÓN: restar trustLevel al usuario por reporte basura
                 if (reportOwner != null) {
+                    adjustTrustLevel(reportOwner, -PENALTY_REJECTED);
+                    String reason = result.getReasoning() != null ? result.getReasoning() : "contenido no válido";
                     notificationUserService.createNotification(
                             reportOwner, null,
-                            "Reporte rechazado",
-                            "Tu reporte #" + reportId + " fue rechazado por la IA por no ser válido.",
+                            "⚠️ Reporte rechazado",
+                            "Tu reporte #" + reportId + " fue rechazado: " + reason
+                                    + ". Perdiste " + (int) PENALTY_REJECTED + " puntos de reputación.",
                             "ALERT");
+                    log.info("[IA-Async] Usuario {} penalizado -{} trustLevel por reporte rechazado #{}",
+                            reportOwner.getId(), (int) PENALTY_REJECTED, reportId);
                 }
 
                 log.info("[IA-Async] Reporte {} ELIMINADO por ser basura (score: 0.0)", reportId);
@@ -207,6 +220,19 @@ public class IAClassificationService {
             log.error("[IA-Async] Error clasificando reporte {}: {}",
                     reportId, e.getMessage(), e);
         }
+    }
+
+    /**
+     * Ajusta el trustLevel del usuario y lo guarda en BD.
+     * Clamped a [0, 100] para no salirse de rango.
+     */
+    private void adjustTrustLevel(User user, double delta) {
+        double current = user.getTrustLevel() != null ? user.getTrustLevel() : 50.0;
+        double newLevel = Math.max(0, Math.min(100, current + delta));
+        user.setTrustLevel(newLevel);
+        userRepository.save(user);
+        log.info("[TrustLevel] Usuario {} ajustado: {} → {} (delta: {})",
+                user.getId(), (int) current, (int) newLevel, (delta >= 0 ? "+" : "") + (int) delta);
     }
 
     private ReportResponseDTO convertToDTO(Report report) {
@@ -246,14 +272,18 @@ public class IAClassificationService {
 
     private String buildPrompt(Report report) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("Eres un Analista de Veracidad y Clasificación de Incidentes para SafeCityAI en Pasto, Colombia. ");
-        prompt.append("Tu objetivo es determinar si un reporte es real y asignarle la categoría correcta.\n\n");
+        prompt.append("Eres el sistema de filtrado de SafeCityAI en Pasto, Colombia. ");
+        prompt.append("Evalúas reportes ciudadanos de seguridad en DOS FASES OBLIGATORIAS Y SECUENCIALES. ");
+        prompt.append("Nunca te saltes la FASE 1 ni mezcles las fases.\n\n");
+        prompt.append(
+                "Tambien debes asignarle la categoría correcta al reporte si no coincide con la categoría marcada.\n\n");
 
         // Contexto del reporte
         prompt.append("=== DATOS DEL REPORTE ===\n");
         prompt.append("- Descripción: \"").append(report.getDescription()).append("\"\n");
         prompt.append("- Categoría marcada: ").append(report.getIncidentType()).append("\n");
-        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ (ubicación verificada)" : "NO").append("\n");
+        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ (ubicación verificada)" : "NO")
+                .append("\n");
         prompt.append("- Foto adjunta: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n");
 
         // Reputación del usuario
@@ -262,51 +292,56 @@ public class IAClassificationService {
             if (userAvgScore != null) {
                 String repLabel = userAvgScore >= 70 ? "ALTA" : (userAvgScore >= 40 ? "MEDIA" : "BAJA");
                 prompt.append("- Reputación histórica del usuario: ").append(repLabel)
-                      .append(String.format(" (%.0f%% promedio en reportes anteriores verificados)\n", userAvgScore));
+                        .append(String.format(" (%.0f%% promedio en reportes anteriores verificados)\n", userAvgScore));
             }
         }
 
-        prompt.append("\n=== TAREAS ===\n");
-        prompt.append("1. COHERENCIA: Si el reporte describe situaciones imposibles o es claramente una broma ");
-        prompt.append("(aliens, superhéroes, armas de fantasía, reportes tipo 'jaja'), trustScore = 0.\n");
-        prompt.append("2. CATEGORÍA: Si la descripción no coincide con la categoría marcada, corrige 'suggestedType'.\n");
-        prompt.append("   Categorías válidas: [ROBBERY, ACCIDENT, TRAFFIC, TRANSIT_OP, OTHER].\n\n");
+        // --- FASE 1: CORTOCIRCUITO ABSOLUTO ---
+        prompt.append("=== FASE 1: FILTRO ABSOLUTO (ejecutar PRIMERO, antes de calcular nada) ===\n");
+        prompt.append("Si el reporte contiene CUALQUIERA de estos elementos, responde INMEDIATAMENTE ");
+        prompt.append("con trustScore=0 y NO calcules puntos. No hay excepciones.\n\n");
+        prompt.append("Señales de rechazo inmediato:\n");
+        prompt.append("- Leyendas o seres sobrenaturales: 'la mano peluda', 'el coco', 'la llorona', ");
+        prompt.append("'el duende', 'el diablo', fantasmas, brujas, o cualquier entidad ficticia.\n");
+        prompt.append(
+                "- Jerga de internet o burla: 'jajaja', 'xd', 'lol', 'lmao', 'me cayó el veinte', emojis de risa.\n");
+        prompt.append(
+                "- Imposibilidades físicas: 'mil muertos', 'el bus explotó y nadie murió', exageraciones absurdas.\n");
+        prompt.append("- Insultos, groserías o texto incoherente.\n");
+        prompt.append("- Queja de servicios públicos: agua, luz, internet, basuras, baches.\n");
+        prompt.append("- Contenido político o de opinión personal.\n\n");
+        prompt.append("REGLA CRÍTICA DE FASE 1: La presencia de GPS, foto o cuenta verificada NO rescata ");
+        prompt.append("un reporte que dispara este filtro. Un reporte con GPS que dice ");
+        prompt.append("'la mano peluda me robó' SIEMPRE es trustScore=0.\n\n");
 
-        prompt.append("=== DEFINICIÓN DE CATEGORÍAS ===\n");
-        prompt.append("- ROBBERY: robo, atraco, hurto, asalto a mano armada.\n");
-        prompt.append("- ACCIDENT: accidente de tránsito con heridos o daños.\n");
-        prompt.append("- TRAFFIC: congestión, bloqueo vial, mal estado de vías.\n");
-        prompt.append("- TRANSIT_OP: operativo policial, retén, cierre programado.\n");
-        prompt.append("- OTHER (USO RESTRINGIDO): SOLO para incendios, inundaciones, derrumbes, ");
-        prompt.append("fugas de gas, sismos, emergencias industriales o ambientales graves.\n");
-        prompt.append("  ⚠️ OTHER NO aplica para: peleas callejeras sin contexto, quejas de servicios, ");
-        prompt.append("ventas, eventos culturales, manifestaciones, política, o contenido mundano.\n\n");
+        // --- FASE 2: PUNTUACIÓN ---
+        prompt.append("=== FASE 2: PUNTUACIÓN (solo si el reporte pasó FASE 1 limpiamente) ===\n");
+        prompt.append("Puntaje base: 20 puntos (el reporte existe y no es basura obvia).\n");
+        prompt.append("Suma SOLO si el reporte es serio y describe un evento de seguridad real:\n");
+        prompt.append("+ Descripción seria, coherente y útil para una autoridad: +30 pts.\n");
+        prompt.append("+ Detalles específicos (placas, descripción física del agresor, dirección exacta): +20 pts.\n");
+        prompt.append("+ GPS verificado (coordenadas presentes): +15 pts.\n");
+        prompt.append("+ Foto adjunta y relevante: +15 pts.\n\n");
+        prompt.append("Penalizaciones (aplicar después de sumar):\n");
+        prompt.append("- Descripción demasiado vaga, ej: solo 'me robaron': -30 pts.\n");
+        prompt.append("- Reporte de segunda mano o rumor ('me dijeron que...'): -15 pts.\n\n");
 
-        prompt.append("=== RECHAZO AUTOMÁTICO (trustScore = 0) ===\n");
-        prompt.append("- Menciona figuras políticas (presidente, alcalde, Petro, gobernador, senador) como protagonistas del incidente.\n");
-        prompt.append("- El reporte es sobre un evento social, cultural o deportivo sin emergencia real.\n");
-        prompt.append("- La descripción es claramente ficticia, una broma o texto sin sentido.\n");
-        prompt.append("- El contenido es una queja de servicio público (agua, luz, gas) sin emergencia física.\n\n");
+        // --- CATEGORÍAS ---
+        prompt.append("=== CATEGORÍAS VÁLIDAS (IncidentType) ===\n");
+        prompt.append("ROBBERY: Robos, atracos, hurtos activos o recientes.\n");
+        prompt.append("ACCIDENT: Choques, atropellos, incidentes viales con daños o heridos.\n");
+        prompt.append("TRAFFIC: Trancón pesado, semáforos dañados, vías bloqueadas.\n");
+        prompt.append("TRANSIT_OP: Retenes, operativos de tránsito, cierres viales oficiales.\n");
+        prompt.append("OTHER: Emergencias físicas únicamente: incendio, inundación, derrumbe, fuga de gas.\n\n");
 
-        prompt.append("=== NOTA IMPORTANTE SOBRE UBICACIÓN ===\n");
-        prompt.append("Si el reporte tiene GPS (coordenadas verificadas), eso ES una ubicación válida, ");
-        prompt.append("aunque el texto no mencione una calle específica. No penalices por esto.\n\n");
-
-        prompt.append("=== REGLAS DE PUNTUACIÓN ===\n");
-        prompt.append("- Reporte con descripción coherente y seria: puntaje base 50.\n");
-        prompt.append("- GPS proporcionado: +15 pts.\n");
-        prompt.append("- Descripción detallada (>80 caracteres): +15 pts.\n");
-        prompt.append("- Foto adjunta: +15 pts.\n");
-        prompt.append("- Usuario con reputación ALTA (>70%): +10 pts extra.\n");
-        prompt.append("- Descripción muy vaga (<20 caracteres) pero coherente: -15 pts.\n");
-        prompt.append("- Contenido político, mundano, ficticio o broma obvia: trustScore = 0.\n\n");
-
-        prompt.append("=== FORMATO DE RESPUESTA (JSON ÚNICAMENTE, SIN TEXTO ADICIONAL) ===\n");
+        // --- FORMATO DE SALIDA ---
+        prompt.append("=== FORMATO DE RESPUESTA: JSON puro, sin texto antes ni después ===\n");
         prompt.append("{\n");
         prompt.append("  \"trustScore\": <0-100>,\n");
-        prompt.append("  \"suggestedType\": \"<CATEGORIA_CORRECTA>\",\n");
-        prompt.append("  \"reasoning\": \"<Breve explicación en español>\",\n");
-        prompt.append("  \"shouldVerify\": <true si trustScore >= 60>\n");
+        prompt.append("  \"suggestedType\": \"<ROBBERY|ACCIDENT|TRAFFIC|TRANSIT_OP|OTHER>\",\n");
+        prompt.append(
+                "  \"reasoning\": \"<Si trustScore=0 por FASE 1: cita la frase exacta que activó el filtro y explica por qué. Si es válido: describe qué información útil aporta el reporte.>\",\n");
+        prompt.append("  \"shouldVerify\": <true si trustScore >= 70, false en caso contrario>\n");
         prompt.append("}\n");
 
         return prompt.toString();
@@ -482,7 +517,8 @@ public class IAClassificationService {
                 case CITIZEN_TEXT -> score += 5;
                 case CITIZEN_VOICE -> score += 5;
                 case INSTITUTIONAL -> score += 10;
-                case SOCIAL_MEDIA -> { } // sin bonus
+                case SOCIAL_MEDIA -> {
+                } // sin bonus
             }
         }
 
