@@ -256,8 +256,10 @@ public class IAClassificationService {
                 .source(report.getSource())
                 .latitude(report.getLatitude())
                 .longitude(report.getLongitude())
+                .photoUrl(report.getPhotoUrl())
                 .trustScore(report.getTrustScore())
                 .aiAnalysis(report.getAiAnalysis())
+                .zoneId(report.getZoneId())
                 .reportDate(report.getReportDate())
                 .build();
     }
@@ -618,6 +620,14 @@ public class IAClassificationService {
             return 0.0;
         }
 
+        // Filtro de contenido inválido (leyendas, xenofobia, armas absurdas)
+        String invalidReason = detectInvalidContent(desc);
+        if (invalidReason != null) {
+            log.info("[Heuristica] Contenido inválido detectado: '{}' → {}",
+                    desc.substring(0, Math.min(desc.length(), 40)), invalidReason);
+            return 0.0;
+        }
+
         // Puntaje base para cualquier reporte coherente
         double score = 50.0;
 
@@ -728,6 +738,81 @@ public class IAClassificationService {
             return true;
 
         return false;
+    }
+
+    /**
+     * Detecta contenido inválido que la heurística debe rechazar (score = 0).
+     * Es el equivalente de FASE 1 del prompt, pero para cuando la IA no responde.
+     * @return razón de rechazo, o null si el contenido es válido.
+     */
+    private String detectInvalidContent(String text) {
+        String lower = text.toLowerCase();
+
+        // Leyendas y seres sobrenaturales
+        String[] legends = {
+                "mano peluda", "la llorona", "el coco", "el duende", "el diablo",
+                "fantasma", "bruja", "aparecido", "espanto", "demonio",
+                "chupacabra", "pie grande", "alien", "ovni", "extraterrestre"
+        };
+        for (String legend : legends) {
+            if (lower.contains(legend))
+                return "Leyenda/sobrenatural: '" + legend + "'";
+        }
+
+        // Armas u objetos absurdos
+        String[] absurdWeapons = {
+                "cuchillo de goma", "pistola de papel", "espada de cartón",
+                "bala de algodón", "arma de juguete", "pistola de agua",
+                "cuchillo de plástico", "granada de mentira"
+        };
+        for (String weapon : absurdWeapons) {
+            if (lower.contains(weapon))
+                return "Arma/objeto absurdo: '" + weapon + "'";
+        }
+
+        // Xenofobia — nacionalidades + contexto de conflicto
+        String[] nationalities = {
+                "venezolano", "venezolana", "venezolanos", "venezolanas",
+                "ecuatoriano", "ecuatoriana", "ecuatorianos", "ecuatorianas",
+                "colombiano", "colombiana", "colombianos", "colombianas",
+                "peruano", "peruana", "peruanos", "peruanas",
+                "inmigrante", "inmigrantes", "extranjero", "extranjeros"
+        };
+        String[] conflictVerbs = {
+                "pelea", "pelean", "peleas", "peleando",
+                "entre", "contra", "causan", "culpa", "invaden"
+        };
+        for (String nat : nationalities) {
+            if (lower.contains(nat)) {
+                for (String verb : conflictVerbs) {
+                    if (lower.contains(verb))
+                        return "Contenido xenófobo: menciona '" + nat + "' + '" + verb + "'";
+                }
+            }
+        }
+
+        // Jerga de internet y burlas
+        String[] slang = {
+                "jajaja", "jeje", "xd", "lol", "lmao", "rofl",
+                "me cayó el veinte", "🤣", "😂", "💀"
+        };
+        for (String s : slang) {
+            if (lower.contains(s))
+                return "Jerga/burla: '" + s + "'";
+        }
+
+        // Contenido político
+        String[] political = {
+                "gobierno", "presidente", "alcalde", "gobernador",
+                "petro", "uribe", "congreso", "senado", "elecciones",
+                "partido político", "votación"
+        };
+        for (String p : political) {
+            if (lower.contains(p))
+                return "Contenido político: '" + p + "'";
+        }
+
+        return null; // contenido válido
     }
 
     private IncidentType detectIncidentType(String description) {
