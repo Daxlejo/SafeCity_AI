@@ -1,5 +1,6 @@
 package com.safecityai.backend.controller;
 
+import com.safecityai.backend.dto.ChangePasswordDTO;
 import com.safecityai.backend.dto.UserRegisterDTO;
 import com.safecityai.backend.dto.UserResponseDTO;
 import com.safecityai.backend.service.UserService;
@@ -55,5 +56,13 @@ public class UserController {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
         UserResponseDTO profile = userService.getProfile(email);
         return ResponseEntity.ok(userService.updateProfile(profile.getId(), dto));
+    }
+
+    // PUT /api/v1/users/me/password → 200 OK
+    @PutMapping("/me/password")
+    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        userService.changePassword(email, dto);
+        return ResponseEntity.ok().build();
     }
 }

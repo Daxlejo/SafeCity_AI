@@ -8,6 +8,7 @@ import com.safecityai.backend.model.enums.ReportSource;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.safecityai.backend.repository.ReportRepository;
+import com.safecityai.backend.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -34,6 +35,9 @@ class IAClassificationServiceTest {
 
     @Mock
     private ReportRepository reportRepository;
+
+    @Mock
+    private UserRepository userRepository;
 
     @Mock
     private NotificationService notificationService;
@@ -158,11 +162,14 @@ class IAClassificationServiceTest {
         @Test
         @DisplayName("Score >= 50 → auto-verifica y notifica al usuario")
         void highScore_shouldVerifyAndNotify() {
-            User owner = User.builder().id(10L).name("Test User").email("test@test.com").build();
+            User owner = User.builder().id(10L).name("Test User").email("test@test.com")
+                    .trustLevel(50.0).build();
             validReport.setReportedBy(owner);
 
             when(reportRepository.findById(1L)).thenReturn(Optional.of(validReport));
             when(reportRepository.save(any(Report.class))).thenReturn(validReport);
+            lenient().when(reportRepository.findAverageTrustScoreByUser(anyLong())).thenReturn(50.0);
+            lenient().when(userRepository.save(any(User.class))).thenReturn(owner);
 
             iaService.classifyAsync(1L);
 
@@ -181,11 +188,14 @@ class IAClassificationServiceTest {
         @Test
         @DisplayName("Score == 0 → elimina reporte y notifica rechazo")
         void zeroScore_shouldDeleteAndNotify() {
-            User owner = User.builder().id(10L).name("Test User").email("test@test.com").build();
+            User owner = User.builder().id(10L).name("Test User").email("test@test.com")
+                    .trustLevel(50.0).build();
             gibberishReport.setReportedBy(owner);
 
             when(reportRepository.findById(2L)).thenReturn(Optional.of(gibberishReport));
             when(reportRepository.save(any(Report.class))).thenReturn(gibberishReport);
+            lenient().when(reportRepository.findAverageTrustScoreByUser(anyLong())).thenReturn(null);
+            lenient().when(userRepository.save(any(User.class))).thenReturn(owner);
 
             iaService.classifyAsync(2L);
 
@@ -197,7 +207,7 @@ class IAClassificationServiceTest {
 
             // Debe crear notificación de rechazo
             verify(notificationUserService).createNotification(
-                    eq(owner), isNull(), eq("Reporte rechazado"),
+                    eq(owner), isNull(), eq("⚠️ Reporte rechazado"),
                     contains("rechazado"), eq("ALERT"));
         }
 
