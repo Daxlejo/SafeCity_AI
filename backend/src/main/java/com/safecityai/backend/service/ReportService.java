@@ -34,15 +34,20 @@ public class ReportService {
         Report report = convertToEntity(dto);
 
         // ═══════════════ REVERSE GEOCODING ═══════════════
-        // Si el usuario envió coordenadas GPS pero NO dirección,
+        // Si el usuario envió coordenadas GPS pero NO dirección real,
         // convertimos las coordenadas a nombre de barrio automáticamente
         // Ejemplo: (1.2136, -77.2784) → "Anganoy, Pasto"
-        if (report.getLatitude() != null && report.getLongitude() != null
-                && (report.getAddress() == null || report.getAddress().isBlank())) {
-            String address = geocodingService.reverseGeocode(
-                    report.getLatitude(), report.getLongitude());
-            report.setAddress(address);
-            log.info("Geocoding: ({}, {}) → {}", report.getLatitude(), report.getLongitude(), address);
+        // También detecta si el frontend envió coords como address ("1.19951, -77.28434")
+        if (report.getLatitude() != null && report.getLongitude() != null) {
+            boolean needsGeocoding = report.getAddress() == null
+                    || report.getAddress().isBlank()
+                    || report.getAddress().matches("^-?\\d+\\.\\d+,\\s*-?\\d+\\.\\d+$");
+            if (needsGeocoding) {
+                String address = geocodingService.reverseGeocode(
+                        report.getLatitude(), report.getLongitude());
+                report.setAddress(address);
+                log.info("Geocoding: ({}, {}) → {}", report.getLatitude(), report.getLongitude(), address);
+            }
         }
 
         // Vincular reporte al usuario autenticado
