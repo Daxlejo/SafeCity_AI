@@ -370,15 +370,28 @@ public class IAClassificationService {
 
         // --- FASE 2: PUNTUACIÓN ---
         prompt.append("=== FASE 2: PUNTUACIÓN (solo si el reporte pasó FASE 1 limpiamente) ===\n");
-        prompt.append("Puntaje base: 20 puntos (el reporte existe y no es basura obvia).\n");
-        prompt.append("Suma SOLO si el reporte es serio y describe un evento de seguridad real:\n");
-        prompt.append("+ Descripción seria, coherente y útil para una autoridad: +30 pts.\n");
-        prompt.append("+ Detalles específicos (placas, descripción física del agresor, dirección exacta): +20 pts.\n");
-        prompt.append("+ GPS verificado (coordenadas presentes): +15 pts.\n");
-        prompt.append("+ Foto adjunta y relevante: +15 pts.\n\n");
-        prompt.append("Penalizaciones (aplicar después de sumar):\n");
-        prompt.append("- Descripción demasiado vaga, ej: solo 'me robaron': -30 pts.\n");
-        prompt.append("- Reporte de segunda mano o rumor ('me dijeron que...'): -15 pts.\n\n");
+        prompt.append("Puntaje base: 20 puntos (el reporte existe y no es basura obvia).\n\n");
+        prompt.append("BONIFICACIONES (sumar SOLO si aplica):\n");
+        prompt.append("+ Describe un evento CONCRETO que YA OCURRIÓ (no especulación): +15 pts.\n");
+        prompt.append("+ Detalles accionables para una autoridad (placas, descripción física, dirección exacta, hora): +20 pts.\n");
+        prompt.append("+ Víctima o agresor identificable (no genérico): +10 pts.\n");
+        prompt.append("+ GPS verificado (coordenadas presentes): +10 pts.\n");
+        prompt.append("+ Foto adjunta: +10 pts.\n\n");
+        prompt.append("PENALIZACIONES FUERTES (aplicar DESPUÉS de sumar bonificaciones):\n");
+        prompt.append("- Lenguaje especulativo: 'parecía que', 'creo que', 'tal vez', 'posiblemente', ");
+        prompt.append("'algo sospechoso', 'iban a': -25 pts. Un reporte debe describir HECHOS, no suposiciones.\n");
+        prompt.append("- Sin incidente concreto: solo 'vi algo raro', 'ambiente tenso', 'zona peligrosa': -25 pts.\n");
+        prompt.append("- Descripción vaga sin detalles útiles (menos de 2 datos concretos): -20 pts.\n");
+        prompt.append("- Reporte de segunda mano o rumor ('me dijeron que...', 'escuché que...'): -20 pts.\n");
+        prompt.append("- Sin víctima, sin agresor, sin hora, sin descripción del evento: -15 pts.\n\n");
+        prompt.append("REGLA CLAVE: GPS y foto NO compensan una descripción mala. ");
+        prompt.append("Un reporte con GPS + foto pero texto vago como 'vi algo sospechoso' ");
+        prompt.append("NO debe superar 45 puntos. La calidad de la DESCRIPCIÓN es lo principal.\n\n");
+        prompt.append("EJEMPLOS de puntuación esperada:\n");
+        prompt.append("- 'Vi algo sospechoso cerca del parque, parecía que iban a robar' + GPS → máx 35 pts (especulativo, sin hechos)\n");
+        prompt.append("- 'Me robaron el celular' sin más detalles → máx 40 pts (vago, sin datos útiles)\n");
+        prompt.append("- 'Dos sujetos en moto robaron a una señora en la calle 18 con carrera 27, eran las 9pm, ");
+        prompt.append("uno tenía camiseta roja' + GPS + foto → 85-95 pts (concreto, accionable)\n\n");
 
         // --- CATEGORÍAS ---
         prompt.append("=== CATEGORÍAS VÁLIDAS (IncidentType) ===\n");

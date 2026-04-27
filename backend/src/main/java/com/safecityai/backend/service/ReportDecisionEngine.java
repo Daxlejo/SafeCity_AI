@@ -54,7 +54,7 @@ public class ReportDecisionEngine {
      */
     public boolean needsSecondOpinion(IAClassificationDTO gemmaResult) {
         double score = gemmaResult.getTrustScore();
-        boolean needed = score > LOW_CONFIDENCE_THRESHOLD && score < HIGH_CONFIDENCE_THRESHOLD;
+        boolean needed = score > LOW_CONFIDENCE_THRESHOLD && score <= HIGH_CONFIDENCE_THRESHOLD;
 
         if (needed) {
             log.info("[Decisión] Gemma score={} está en zona gris [{}-{}]. Llamando a Hermes.",
