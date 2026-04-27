@@ -40,7 +40,7 @@ public class ReportCreateDTO {
     @NotNull(message = "El tipo de incidente es obligatorio")
     private IncidentType incidentType;
 
-    @NotBlank(message = "La dirección es obligatoria")
+    // La dirección se genera automáticamente por reverse geocoding si hay GPS
     @Size(max = 255, message = "La dirección no puede exceder 255 caracteres")
     private String address;
 
