@@ -311,107 +311,99 @@ public class IAClassificationService {
     }
 
     private String buildPrompt(Report report) {
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("Eres el sistema de filtrado de SafeCityAI en Pasto, Colombia. ");
-        prompt.append("Evalúas reportes ciudadanos de seguridad en DOS FASES OBLIGATORIAS Y SECUENCIALES. ");
-        prompt.append("Nunca te saltes la FASE 1 ni mezcles las fases.\n\n");
-        prompt.append(
-                "Tambien debes asignarle la categoría correcta al reporte si no coincide con la categoría marcada.\n\n");
+        StringBuilder p = new StringBuilder();
 
-        // Contexto del reporte
-        prompt.append("=== DATOS DEL REPORTE ===\n");
-        prompt.append("- Descripción: \"").append(report.getDescription()).append("\"\n");
-        prompt.append("- Categoría marcada: ").append(report.getIncidentType()).append("\n");
-        prompt.append("- GPS disponible: ").append(report.getLatitude() != null ? "SÍ (ubicación verificada)" : "NO")
-                .append("\n");
-        prompt.append("- Foto adjunta: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n");
+        // === ROL Y CONTEXTO ===
+        p.append("Eres un evaluador ESTRICTO de reportes de seguridad para SafeCityAI en Pasto, Colombia.\n");
+        p.append("Tu trabajo es asignar un puntaje de confianza (trustScore 0-100) que refleje ");
+        p.append("qué tan ÚTIL y ACCIONABLE es este reporte para las autoridades.\n");
+        p.append("Eres EXIGENTE: solo los reportes con información concreta reciben puntajes altos.\n\n");
 
-        // Reputación del usuario
+        // === DATOS DEL REPORTE ===
+        p.append("=== REPORTE A EVALUAR ===\n");
+        p.append("Descripción: \"").append(report.getDescription()).append("\"\n");
+        p.append("Categoría: ").append(report.getIncidentType()).append("\n");
+        p.append("GPS: ").append(report.getLatitude() != null ? "SÍ" : "NO").append("\n");
+        p.append("Foto: ").append(report.getPhotoUrl() != null ? "SÍ" : "NO").append("\n");
         if (report.getReportedBy() != null) {
-            Double userAvgScore = reportRepository.findAverageTrustScoreByUser(report.getReportedBy().getId());
-            if (userAvgScore != null) {
-                String repLabel = userAvgScore >= 70 ? "ALTA" : (userAvgScore >= 40 ? "MEDIA" : "BAJA");
-                prompt.append("- Reputación histórica del usuario: ").append(repLabel)
-                        .append(String.format(" (%.0f%% promedio en reportes anteriores verificados)\n", userAvgScore));
+            Double avg = reportRepository.findAverageTrustScoreByUser(report.getReportedBy().getId());
+            if (avg != null) {
+                p.append("Reputación usuario: ").append(String.format("%.0f%%\n", avg));
             }
         }
+        p.append("\n");
 
-        // --- FASE 1: CORTOCIRCUITO ABSOLUTO ---
-        prompt.append("=== FASE 1: FILTRO ABSOLUTO (ejecutar PRIMERO, antes de calcular nada) ===\n");
-        prompt.append("Si el reporte contiene CUALQUIERA de estos elementos, responde INMEDIATAMENTE ");
-        prompt.append("con trustScore=0 y NO calcules puntos. No hay excepciones.\n\n");
-        prompt.append("Señales de rechazo inmediato:\n");
-        prompt.append("- Leyendas o seres sobrenaturales: 'la mano peluda', 'el coco', 'la llorona', ");
-        prompt.append("'el duende', 'el diablo', fantasmas, brujas, o cualquier entidad ficticia.\n");
-        prompt.append(
-                "- Jerga de internet o burla: 'jajaja', 'xd', 'lol', 'lmao', 'me cayó el veinte', emojis de risa.\n");
-        prompt.append(
-                "- Imposibilidades físicas: 'mil muertos', 'el bus explotó y nadie murió', exageraciones absurdas.\n");
-        prompt.append("- Objetos absurdos o armas imposibles: 'cuchillo de goma', 'pistola de papel', ");
-        prompt.append("'espada de cartón', 'bala de algodón', o cualquier arma/objeto que NO existe en la realidad.\n");
-        prompt.append("- Insultos, groserías o texto incoherente.\n");
-        prompt.append("- Queja de servicios públicos: agua, luz, internet, basuras, baches.\n");
-        prompt.append("- Contenido político o de opinión personal.\n");
-        prompt.append("- Contenido xenófobo, racista o discriminatorio: reportes que mencionan ");
-        prompt.append("nacionalidades, etnias o grupos sociales como causa del problema. ");
-        prompt.append("Ejemplo: 'peleas entre venezolanos y ecuatorianos', 'los [nacionalidad] causan problemas'. ");
-        prompt.append("SafeCity NO es plataforma para discurso de odio.\n");
-        prompt.append("- Violencia generalizada sin detalles útiles: reportes como 'peleas en el barrio', ");
-        prompt.append("'hay problemas aquí', 'inseguridad total'. Un reporte válido DEBE tener: ");
-        prompt.append("qué pasó específicamente, a quién afectó, y dónde exactamente.\n\n");
-        prompt.append("REGLA CRÍTICA DE FASE 1: La presencia de GPS, foto o cuenta verificada NO rescata ");
-        prompt.append("un reporte que dispara este filtro. Un reporte con GPS que dice ");
-        prompt.append("'la mano peluda me robó' SIEMPRE es trustScore=0.\n\n");
-        prompt.append("EJEMPLOS de reportes que DEBEN ser rechazados (trustScore=0):\n");
-        prompt.append("- 'Peleas entre ecuatorianos y venezolanos' → xenófobo + sin detalles\n");
-        prompt.append("- 'Robo con cuchillo de goma' → arma absurda, probable broma\n");
-        prompt.append("- 'Hay mucha inseguridad por aquí' → demasiado vago, sin incidente específico\n");
-        prompt.append("- 'Me dijeron que robaron a alguien' → rumor de segunda mano\n\n");
+        // === FASE 1: RECHAZO INMEDIATO ===
+        p.append("=== FASE 1: RECHAZO INMEDIATO → trustScore=0 ===\n");
+        p.append("Si detectas CUALQUIERA de estos, responde trustScore=0 SIN CALCULAR nada más:\n");
+        p.append("• Leyendas/sobrenatural: llorona, mano peluda, fantasmas, duende, diablo\n");
+        p.append("• Jerga/burla: jajaja, xd, lol, 🤣, 😂\n");
+        p.append("• Armas absurdas: cuchillo de goma, pistola de papel, espada de cartón\n");
+        p.append("• Exageraciones: mil muertos, nadie sobrevivió, explosión nuclear\n");
+        p.append("• Xenofobia: culpar nacionalidades/etnias de problemas\n");
+        p.append("• Servicios públicos: agua, luz, basura, baches\n");
+        p.append("• Opinión política o insultos\n");
+        p.append("• Texto incoherente o gibberish\n");
+        p.append("GPS, foto o reputación NO rescatan un reporte que activa FASE 1.\n\n");
 
-        // --- FASE 2: PUNTUACIÓN ---
-        prompt.append("=== FASE 2: PUNTUACIÓN (solo si el reporte pasó FASE 1 limpiamente) ===\n");
-        prompt.append("Puntaje base: 20 puntos (el reporte existe y no es basura obvia).\n\n");
-        prompt.append("BONIFICACIONES (sumar SOLO si aplica):\n");
-        prompt.append("+ Describe un evento CONCRETO que YA OCURRIÓ (no especulación): +15 pts.\n");
-        prompt.append("+ Detalles accionables para una autoridad (placas, descripción física, dirección exacta, hora): +20 pts.\n");
-        prompt.append("+ Víctima o agresor identificable (no genérico): +10 pts.\n");
-        prompt.append("+ GPS verificado (coordenadas presentes): +10 pts.\n");
-        prompt.append("+ Foto adjunta: +10 pts.\n\n");
-        prompt.append("PENALIZACIONES FUERTES (aplicar DESPUÉS de sumar bonificaciones):\n");
-        prompt.append("- Lenguaje especulativo: 'parecía que', 'creo que', 'tal vez', 'posiblemente', ");
-        prompt.append("'algo sospechoso', 'iban a': -25 pts. Un reporte debe describir HECHOS, no suposiciones.\n");
-        prompt.append("- Sin incidente concreto: solo 'vi algo raro', 'ambiente tenso', 'zona peligrosa': -25 pts.\n");
-        prompt.append("- Descripción vaga sin detalles útiles (menos de 2 datos concretos): -20 pts.\n");
-        prompt.append("- Reporte de segunda mano o rumor ('me dijeron que...', 'escuché que...'): -20 pts.\n");
-        prompt.append("- Sin víctima, sin agresor, sin hora, sin descripción del evento: -15 pts.\n\n");
-        prompt.append("REGLA CLAVE: GPS y foto NO compensan una descripción mala. ");
-        prompt.append("Un reporte con GPS + foto pero texto vago como 'vi algo sospechoso' ");
-        prompt.append("NO debe superar 45 puntos. La calidad de la DESCRIPCIÓN es lo principal.\n\n");
-        prompt.append("EJEMPLOS de puntuación esperada:\n");
-        prompt.append("- 'Vi algo sospechoso cerca del parque, parecía que iban a robar' + GPS → máx 35 pts (especulativo, sin hechos)\n");
-        prompt.append("- 'Me robaron el celular' sin más detalles → máx 40 pts (vago, sin datos útiles)\n");
-        prompt.append("- 'Dos sujetos en moto robaron a una señora en la calle 18 con carrera 27, eran las 9pm, ");
-        prompt.append("uno tenía camiseta roja' + GPS + foto → 85-95 pts (concreto, accionable)\n\n");
+        // === FASE 2: PUNTUACIÓN ESTRICTA ===
+        p.append("=== FASE 2: PUNTUACIÓN (solo si pasó FASE 1) ===\n\n");
 
-        // --- CATEGORÍAS ---
-        prompt.append("=== CATEGORÍAS VÁLIDAS (IncidentType) ===\n");
-        prompt.append("ROBBERY: Robos, atracos, hurtos activos o recientes.\n");
-        prompt.append("ACCIDENT: Choques, atropellos, incidentes viales con daños o heridos.\n");
-        prompt.append("TRAFFIC: Trancón pesado, semáforos dañados, vías bloqueadas.\n");
-        prompt.append("TRANSIT_OP: Retenes, operativos de tránsito, cierres viales oficiales.\n");
-        prompt.append("OTHER: Emergencias físicas únicamente: incendio, inundación, derrumbe, fuga de gas.\n\n");
+        p.append("REGLA DE ORO: Un reporte DEBE responder al menos 2 de estas 3 preguntas ");
+        p.append("para superar 50 puntos:\n");
+        p.append("1. ¿QUÉ pasó exactamente? (acción concreta, no suposición)\n");
+        p.append("2. ¿A QUIÉN afectó o QUIÉN lo hizo? (víctima o agresor identificable)\n");
+        p.append("3. ¿DÓNDE y CUÁNDO? (lugar específico, hora)\n");
+        p.append("Si no responde al menos 2 → MÁXIMO 45 puntos sin importar GPS/foto.\n\n");
 
-        // --- FORMATO DE SALIDA ---
-        prompt.append("=== FORMATO DE RESPUESTA: JSON puro, sin texto antes ni después ===\n");
-        prompt.append("{\n");
-        prompt.append("  \"trustScore\": <0-100>,\n");
-        prompt.append("  \"suggestedType\": \"<ROBBERY|ACCIDENT|TRAFFIC|TRANSIT_OP|OTHER>\",\n");
-        prompt.append(
-                "  \"reasoning\": \"<Si trustScore=0 por FASE 1: cita la frase exacta que activó el filtro y explica por qué. Si es válido: describe qué información útil aporta el reporte.>\",\n");
-        prompt.append("  \"shouldVerify\": <true si trustScore >= 70, false en caso contrario>\n");
-        prompt.append("}\n");
+        p.append("CÁLCULO:\n");
+        p.append("Base: 15 puntos (existe y no es basura)\n");
+        p.append("+ Evento concreto que YA OCURRIÓ (no especulación): +20\n");
+        p.append("+ Detalles accionables (placa, ropa, dirección exacta, hora): +25\n");
+        p.append("+ Víctima o agresor identificable: +10\n");
+        p.append("+ GPS verificado: +10 (SOLO si la descripción ya tiene calidad ≥ 40)\n");
+        p.append("+ Foto adjunta: +10 (SOLO si la descripción ya tiene calidad ≥ 40)\n");
+        p.append("+ Reputación alta del usuario (≥70): +5\n\n");
 
-        return prompt.toString();
+        p.append("PENALIZACIONES (aplicar SIEMPRE, incluso si suma alta):\n");
+        p.append("• Lenguaje especulativo ('parecía que', 'como que', 'creo que vi', ");
+        p.append("'querían', 'iban a', 'sospechoso'): TECHO MÁXIMO 35 puntos para todo el reporte.\n");
+        p.append("• Sin incidente concreto ('vi algo raro', 'tener cuidado por esta zona'): -30\n");
+        p.append("• Demasiado corto o vago (menos de 3 datos útiles): -20\n");
+        p.append("• Rumor ('me dijeron', 'escuché que', 'dicen que'): -25\n");
+        p.append("• Advertencia genérica sin hechos ('cuidado', 'peligroso', 'zona caliente'): -20\n\n");
+
+        // === EJEMPLOS DE CALIBRACIÓN ===
+        p.append("=== EJEMPLOS DE CALIBRACIÓN (usa estos como referencia) ===\n");
+        p.append("SCORE 0: 'La llorona me persiguió' → sobrenatural\n");
+        p.append("SCORE 0: 'Peleas entre venezolanos' → xenófobo\n");
+        p.append("SCORE 20-30: 'Vi 2 sospechosos como que querían robar a alguien' → ");
+        p.append("ESPECULATIVO, no pasó nada concreto, sin detalles, techo 35\n");
+        p.append("SCORE 25-35: 'Robo con arma blanca, tener cuidado por esta zona' → ");
+        p.append("Menciona un evento pero sin detalles útiles (¿cuándo? ¿a quién? ¿descripción del agresor?). ");
+        p.append("'Tener cuidado' es advertencia genérica, no información accionable.\n");
+        p.append("SCORE 30-40: 'Me robaron el celular en el centro' → ");
+        p.append("Evento concreto pero sin detalles (¿hora? ¿cuántos? ¿descripción?)\n");
+        p.append("SCORE 45-55: 'Choque entre moto y carro en la Av. Chile, hay heridos' → ");
+        p.append("Evento concreto + ubicación + consecuencias visibles\n");
+        p.append("SCORE 60-70: 'A las 9pm dos tipos en moto me robaron el celular en la calle 18, ");
+        p.append("uno tenía camiseta negra' + GPS → Evento + hora + descripción parcial + GPS\n");
+        p.append("SCORE 80-95: 'Robo a mano armada, 2 sujetos en moto negra sin placa, ");
+        p.append("asaltaron a una señora en la esquina de la carrera 27 con calle 18' + GPS + foto → ");
+        p.append("Evento concreto + víctima + descripción del vehículo + ubicación exacta + evidencia\n\n");
+
+        // === CATEGORÍAS ===
+        p.append("=== CATEGORÍAS ===\n");
+        p.append("ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER\n\n");
+
+        // === FORMATO ===
+        p.append("Responde SOLO este JSON, sin texto adicional:\n");
+        p.append("{\"trustScore\":<0-100>,");
+        p.append("\"suggestedType\":\"<TIPO>\",");
+        p.append("\"reasoning\":\"<explicación breve>\",");
+        p.append("\"shouldVerify\":<true si trustScore>=80>}\n");
+
+        return p.toString();
     }
 
 
