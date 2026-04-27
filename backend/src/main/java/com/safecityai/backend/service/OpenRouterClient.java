@@ -5,10 +5,12 @@ import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.TrustLevel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -62,6 +64,27 @@ public class OpenRouterClient {
     public OpenRouterClient() {
         this.restTemplate = new RestTemplate();
         this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * Validación al arrancar: verifica que la API key está configurada
+     * y muestra el prefijo para diagnóstico.
+     */
+    @PostConstruct
+    void validateApiKey() {
+        if (apiKey == null || apiKey.isBlank()) {
+            log.error("[OpenRouterClient] ⚠️ OPENROUTER_API_KEY no está configurada. " +
+                    "La clasificación IA NO funcionará (fallback a heurística).");
+        } else {
+            String prefix = apiKey.length() > 15 ? apiKey.substring(0, 15) + "..." : "***";
+            log.info("[OpenRouterClient] ✅ API Key configurada (prefijo: {})", prefix);
+            // Detectar doble prefijo común
+            if (apiKey.startsWith("sk-or-v1-sk-or-v1-")) {
+                log.error("[OpenRouterClient] ⚠️ API Key tiene DOBLE PREFIJO 'sk-or-v1-sk-or-v1-'. " +
+                        "Esto causa 401 Unauthorized. Corrige la variable OPENROUTER_API_KEY " +
+                        "para que empiece con 'sk-or-v1-' (un solo prefijo).");
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -148,6 +171,16 @@ public class OpenRouterClient {
             } catch (Exception e) {
                 lastException = e;
                 String msg = e.getMessage() != null ? e.getMessage() : "";
+
+                // 401 = API key inválida → NO reintentar, logear diagnóstico claro
+                boolean isAuthError = msg.contains("401") || (e instanceof HttpClientErrorException.Unauthorized);
+                if (isAuthError) {
+                    log.error("[IA-{}] ❌ 401 Unauthorized para reporte #{}. " +
+                            "La OPENROUTER_API_KEY es inválida o tiene formato incorrecto. " +
+                            "Verifica la variable de entorno en Render.", label, reportId);
+                    break;
+                }
+
                 boolean isRetryable = msg.contains("429") || msg.contains("500")
                         || msg.contains("502") || msg.contains("503") || msg.contains("rate");
 
