@@ -79,6 +79,9 @@ public class ReportCreateDTO {
     // URL de la foto del incidente (opcional, sube el trust score)
     private String photoUrl;
 
+    // Fecha/hora en que ocurrió el incidente (opcional)
+    private String incidentDate;
+
     // Zona del incidente
     private Long zoneId;
 }

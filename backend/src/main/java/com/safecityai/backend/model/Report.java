@@ -38,6 +38,10 @@ public class Report {
     @Column(name = "report_date", updatable = false)
     private LocalDateTime reportDate;
 
+    // Fecha/hora en que ocurrió el incidente (reportado por el usuario)
+    @Column(name = "incident_date")
+    private LocalDateTime incidentDate;
+
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

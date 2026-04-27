@@ -168,7 +168,7 @@ public class ReportService {
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {
-        return Report.builder()
+        Report.ReportBuilder builder = Report.builder()
                 .description(dto.getDescription())
                 .incidentType(dto.getIncidentType())
                 .address(dto.getAddress())
@@ -177,8 +177,18 @@ public class ReportService {
                 .longitude(dto.getLongitude())
                 .photoUrl(dto.getPhotoUrl())
                 .zoneId(dto.getZoneId())
-                .status(ReportStatus.PENDING)
-                .build();
+                .status(ReportStatus.PENDING);
+
+        // Parsear fecha del incidente si la enviaron
+        if (dto.getIncidentDate() != null && !dto.getIncidentDate().isBlank()) {
+            try {
+                builder.incidentDate(java.time.LocalDateTime.parse(dto.getIncidentDate()));
+            } catch (Exception e) {
+                log.warn("No se pudo parsear incidentDate '{}': {}", dto.getIncidentDate(), e.getMessage());
+            }
+        }
+
+        return builder.build();
     }
 
     private ReportResponseDTO convertToDTO(Report report) {
@@ -196,6 +206,7 @@ public class ReportService {
                 .aiAnalysis(report.getAiAnalysis())
                 .zoneId(report.getZoneId())
                 .reportDate(report.getReportDate())
+                .incidentDate(report.getIncidentDate())
                 .build();
     }
 }
