@@ -2,6 +2,8 @@ package com.safecityai.backend.repository;
 
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.ReportStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -10,6 +12,9 @@ import java.util.List;
 
 @Repository
 public interface ReportRepository extends JpaRepository<Report, Long> {
+
+    // Reportes públicos: excluye rechazados
+    Page<Report> findByStatusNot(ReportStatus status, Pageable pageable);
 
     // Conteo por tipo de incidente → para grafica de barras
     @Query("SELECT r.incidentType, COUNT(r) FROM Report r GROUP BY r.incidentType")

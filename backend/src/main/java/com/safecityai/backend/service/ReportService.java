@@ -92,7 +92,16 @@ public class ReportService {
 
     @Transactional(readOnly = true)
     public Page<ReportResponseDTO> getAllReports(Pageable pageable) {
-        log.debug("Listando reportes - página: {}, tamaño: {}",
+        log.debug("Listando reportes públicos (sin rechazados) - página: {}, tamaño: {}",
+                pageable.getPageNumber(), pageable.getPageSize());
+
+        return reportRepository.findByStatusNot(ReportStatus.REJECTED, pageable)
+                .map(this::convertToDTO);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ReportResponseDTO> getAllReportsIncludingRejected(Pageable pageable) {
+        log.debug("Listando TODOS los reportes (admin) - página: {}, tamaño: {}",
                 pageable.getPageNumber(), pageable.getPageSize());
 
         return reportRepository.findAll(pageable)

@@ -59,6 +59,18 @@ public class AdminController {
         return ResponseEntity.ok(Map.of("message", "Usuario eliminado", "userId", id));
     }
 
+    // GET /api/v1/admin/reports → todos los reportes (incluyendo rechazados)
+    @GetMapping("/reports")
+    public ResponseEntity<Object> getAllReportsAdmin(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
+            @RequestParam(defaultValue = "reportDate") String sort,
+            @RequestParam(defaultValue = "DESC") String direction) {
+        Sort.Direction sortDirection = Sort.Direction.fromString(direction);
+        Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, Sort.by(sortDirection, sort));
+        return ResponseEntity.ok(reportService.getAllReportsIncludingRejected(pageable));
+    }
+
     // PUT /api/v1/admin/reports/{id}/status?status=VERIFIED → moderar reporte
     @PutMapping("/reports/{id}/status")
     public ResponseEntity<Object> updateReportStatus(@PathVariable Long id,
