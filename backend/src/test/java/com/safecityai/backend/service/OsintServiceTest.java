@@ -1,10 +1,12 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.OsintResultDTO;
+import com.safecityai.backend.model.OsintNewsArticle;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.ReportSource;
 import com.safecityai.backend.model.enums.ReportStatus;
+import com.safecityai.backend.repository.OsintNewsArticleRepository;
 import com.safecityai.backend.repository.ReportRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,15 +27,17 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Tests unitarios para OsintService.
- * Testea deduplicación, filtro de antigüedad, y clasificación async.
- * Las llamadas HTTP externas (Google News, Facebook) se testean indirectamente.
+ * Tests unitarios para OsintService V2.
+ * Usa deduplicación geoespacial+temporal (existsNearbyDuplicate), no hash.
  */
 @ExtendWith(MockitoExtension.class)
 class OsintServiceTest {
 
     @Mock private ReportRepository reportRepository;
-    @Mock private IAClassificationService iaService;
+    @Mock private OsintNewsArticleRepository newsArticleRepository;
+    @Mock private GeocodingService geocodingService;
+    @Mock private AIClient aiClient;
+    @Mock private NotificationService notificationService;
 
     @InjectMocks
     private OsintService osintService;
@@ -44,71 +48,53 @@ class OsintServiceTest {
         ReflectionTestUtils.setField(osintService, "facebookHost", "facebook-scraper3.p.rapidapi.com");
         ReflectionTestUtils.setField(osintService, "schedulerEnabled", false);
         ReflectionTestUtils.setField(osintService, "defaultCity", "Pasto");
+        ReflectionTestUtils.setField(osintService, "maxItemsPerExecution", 10);
+        ReflectionTestUtils.setField(osintService, "dedupRadiusMeters", 500.0);
+        ReflectionTestUtils.setField(osintService, "dedupHours", 12);
     }
 
     @Nested
-    @DisplayName("scanAndClassify — Deduplicación")
+    @DisplayName("scanAndClassify — Deduplicación geoespacial")
     class Deduplication {
 
         @Test
-        @DisplayName("Reporte duplicado → se omite, no se crea en BD")
-        void duplicateContent_shouldBeSkipped() {
-            // El hash ya existe en BD → duplicado
-            when(reportRepository.existsByDescriptionHash(anyString())).thenReturn(true);
-
-            // Mock: simular que searchIncidents retorna 0 resultados
-            // (testeamos deduplicación de forma unitaria via el servicio)
+        @DisplayName("Sin resultados OSINT → no crea reportes")
+        void noResults_shouldCreateNothing() {
             OsintService spySvc = spy(osintService);
-            OsintResultDTO result = OsintResultDTO.builder()
-                    .title("Test")
-                    .content("Robo en la calle 18")
-                    .sourceType(ReportSource.SOCIAL_MEDIA)
-                    .detectedLocation("Pasto")
-                    .publishedAt(LocalDateTime.now())
-                    .confidence(0.8)
-                    .build();
+            doReturn(java.util.List.of()).when(spySvc).searchIncidents(anyString());
 
-            doReturn(java.util.List.of(result)).when(spySvc).searchIncidents(anyString());
+            Map<String, Object> result = spySvc.scanAndClassify("Pasto");
 
-            Map<String, Object> scanResult = spySvc.scanAndClassify("Pasto");
-
-            assertThat(scanResult.get("reportsCreated")).isEqualTo(0);
-            assertThat(scanResult.get("duplicatesSkipped")).isEqualTo(1);
+            assertThat(result.get("reportsCreated")).isEqualTo(0);
             verify(reportRepository, never()).save(any(Report.class));
         }
 
         @Test
-        @DisplayName("Reporte nuevo → se crea en BD y clasifica async")
-        void newContent_shouldCreateAndClassify() {
-            when(reportRepository.existsByDescriptionHash(anyString())).thenReturn(false);
-
-            Report savedReport = Report.builder()
-                    .id(1L)
-                    .description("Accidente en la autopista")
-                    .incidentType(IncidentType.OTHER)
-                    .status(ReportStatus.PENDING)
-                    .build();
-            when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
-
+        @DisplayName("AI descarta el artículo (no es incidente de seguridad) → se omite")
+        void aiDiscardsArticle_shouldBeSkipped() throws Exception {
             OsintService spySvc = spy(osintService);
-            OsintResultDTO result = OsintResultDTO.builder()
-                    .title("Accidente")
-                    .content("Accidente en la autopista")
-                    .sourceType(ReportSource.INSTITUTIONAL)
+
+            OsintResultDTO rawResult = OsintResultDTO.builder()
+                    .title("Política")
+                    .content("El alcalde habló sobre presupuesto")
+                    .sourceType(ReportSource.SOCIAL_MEDIA)
                     .detectedLocation("Pasto")
                     .publishedAt(LocalDateTime.now())
-                    .confidence(0.7)
+                    .confidence(0.5)
                     .build();
 
-            doReturn(java.util.List.of(result)).when(spySvc).searchIncidents(anyString());
+            doReturn(java.util.List.of(rawResult)).when(spySvc).searchIncidents(anyString());
+            // AI devuelve isSecurityIncident=false
+            when(aiClient.sendRawPrompt(anyString(), anyString()))
+                    .thenReturn("{\"isSecurityIncident\":false,\"incidentType\":\"OTHER\"," +
+                            "\"exactAddress\":\"\",\"cleanSummary\":\"\",\"estimatedDate\":\"\"," +
+                            "\"trustScore\":10,\"shouldVerify\":false}");
 
-            Map<String, Object> scanResult = spySvc.scanAndClassify("Pasto");
+            Map<String, Object> result = spySvc.scanAndClassify("Pasto");
 
-            assertThat(scanResult.get("reportsCreated")).isEqualTo(1);
-            assertThat(scanResult.get("duplicatesSkipped")).isEqualTo(0);
-            verify(reportRepository).save(any(Report.class));
-            // Verifica que se llama classifyAsync (no classifyReport)
-            verify(iaService).classifyAsync(1L);
+            assertThat(result.get("reportsCreated")).isEqualTo(0);
+            assertThat(result.get("discardedByAI")).isEqualTo(1);
+            verify(reportRepository, never()).save(any(Report.class));
         }
     }
 
@@ -117,9 +103,10 @@ class OsintServiceTest {
     class AgeFilter {
 
         @Test
-        @DisplayName("Reporte > 7 días → se ignora")
+        @DisplayName("Reporte > 7 días → se ignora sin llamar a la IA")
         void oldReport_shouldBeIgnored() {
             OsintService spySvc = spy(osintService);
+
             OsintResultDTO oldResult = OsintResultDTO.builder()
                     .title("Viejo")
                     .content("Robo antiguo")
@@ -135,6 +122,7 @@ class OsintServiceTest {
 
             assertThat(result.get("reportsCreated")).isEqualTo(0);
             verify(reportRepository, never()).save(any(Report.class));
+            verify(aiClient, never()).sendRawPrompt(anyString(), anyString());
         }
     }
 
@@ -143,35 +131,86 @@ class OsintServiceTest {
     class ReportCreation {
 
         @Test
-        @DisplayName("Reporte OSINT se crea con source SOCIAL_MEDIA y tipo OTHER")
+        @DisplayName("Reporte OSINT válido con geocodificación → se crea con source y tipo correctos")
         void shouldCreateWithCorrectDefaults() {
-            when(reportRepository.existsByDescriptionHash(anyString())).thenReturn(false);
-
-            Report savedReport = Report.builder().id(5L).build();
-            when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
-
             OsintService spySvc = spy(osintService);
+
             OsintResultDTO osintResult = OsintResultDTO.builder()
                     .title("Hurto")
                     .content("Hurto en el centro de Pasto")
-                    .sourceType(null) // sin tipo explícito
+                    .sourceType(null)
                     .detectedLocation("Pasto Centro")
                     .publishedAt(LocalDateTime.now())
                     .confidence(0.6)
                     .build();
 
             doReturn(java.util.List.of(osintResult)).when(spySvc).searchIncidents(anyString());
-            spySvc.scanAndClassify("Pasto");
+
+            // AI responde que es un incidente con dirección geocodificable
+            when(aiClient.sendRawPrompt(anyString(), anyString()))
+                    .thenReturn("{\"isSecurityIncident\":true,\"incidentType\":\"ROBBERY\"," +
+                            "\"exactAddress\":\"Calle 18 con Carrera 25\",\"cleanSummary\":\"Hurto en el centro\"," +
+                            "\"estimatedDate\":\"\",\"trustScore\":65,\"shouldVerify\":true}");
+
+            // Geocodificación retorna coordenadas válidas
+            double[] coords = {1.2136, -77.2784};
+            when(geocodingService.geocode(anyString())).thenReturn(coords);
+
+            // No hay duplicado geoespacial
+            when(reportRepository.existsNearbyDuplicate(any(), anyDouble(), anyDouble(),
+                    anyDouble(), anyDouble(), any())).thenReturn(false);
+
+            Report savedReport = Report.builder().id(5L).build();
+            when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+
+            Map<String, Object> result = spySvc.scanAndClassify("Pasto");
+
+            assertThat(result.get("reportsCreated")).isEqualTo(1);
+            assertThat(result.get("duplicatesSkipped")).isEqualTo(0);
 
             ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
             verify(reportRepository).save(captor.capture());
 
             Report created = captor.getValue();
             assertThat(created.getSource()).isEqualTo(ReportSource.SOCIAL_MEDIA);
-            assertThat(created.getIncidentType()).isEqualTo(IncidentType.OTHER);
-            assertThat(created.getStatus()).isEqualTo(ReportStatus.PENDING);
-            assertThat(created.getAddress()).isEqualTo("Pasto Centro");
-            assertThat(created.getDescriptionHash()).isNotBlank();
+            assertThat(created.getIncidentType()).isEqualTo(IncidentType.ROBBERY);
+            assertThat(created.getLatitude()).isEqualTo(1.2136);
+            assertThat(created.getLongitude()).isEqualTo(-77.2784);
+        }
+
+        @Test
+        @DisplayName("Sin geocodificación (dirección vacía del AI) → se guarda como noticia, no como reporte")
+        void noGeocoding_shouldSaveAsNewsArticle() {
+            OsintService spySvc = spy(osintService);
+
+            OsintResultDTO osintResult = OsintResultDTO.builder()
+                    .title("Incidente")
+                    .content("Robo en zona desconocida de Pasto")
+                    .sourceType(ReportSource.INSTITUTIONAL)
+                    .detectedLocation("Pasto")
+                    .publishedAt(LocalDateTime.now())
+                    .confidence(0.7)
+                    .build();
+
+            doReturn(java.util.List.of(osintResult)).when(spySvc).searchIncidents(anyString());
+
+            // AI responde con dirección vacía → geocoding no se invoca
+            when(aiClient.sendRawPrompt(anyString(), anyString()))
+                    .thenReturn("{\"isSecurityIncident\":true,\"incidentType\":\"ROBBERY\"," +
+                            "\"exactAddress\":\"\",\"cleanSummary\":\"Robo en zona desconocida\"," +
+                            "\"estimatedDate\":\"\",\"trustScore\":40,\"shouldVerify\":false}");
+
+            // exactAddress vacío → geocodingService.geocode() no se llama
+            when(newsArticleRepository.existsByContentHash(anyString())).thenReturn(false);
+
+            Map<String, Object> result = spySvc.scanAndClassify("Pasto");
+
+            assertThat(result.get("reportsCreated")).isEqualTo(0);
+            assertThat(result.get("savedAsNews")).isEqualTo(1);
+            verify(reportRepository, never()).save(any(Report.class));
+            verify(newsArticleRepository).save(any(OsintNewsArticle.class));
+            // geocodingService NO debe haberse llamado porque la dirección está vacía
+            verify(geocodingService, never()).geocode(anyString());
         }
     }
 
@@ -184,10 +223,10 @@ class OsintServiceTest {
         void schedulerDisabled_shouldSkip() {
             ReflectionTestUtils.setField(osintService, "schedulerEnabled", false);
 
-            // No debería lanzar excepciones ni hacer llamadas
             osintService.scheduledScan();
 
             verify(reportRepository, never()).save(any());
+            verify(aiClient, never()).sendRawPrompt(anyString(), anyString());
         }
     }
 }
