@@ -1,6 +1,7 @@
 package com.safecityai.backend.dto;
 
 import com.safecityai.backend.model.enums.IncidentType;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.TrustLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -17,8 +18,18 @@ public class IAClassificationDTO {
     private IncidentType suggestedType;
     private Double trustScore;
     private TrustLevel trustLevel;
-    // Explicacion de la IA sobre por que clasifico asi
     private String reasoning;
-    // Si la IA recomienda verificar (true) o rechazar (false)
+
+    /**
+     * AI-determined status: PENDING, REJECTED, or VERIFIED.
+     * Replaces the old shouldVerify boolean logic.
+     */
+    private ReportStatus statusDecision;
+
+    /**
+     * @deprecated Kept for backward compatibility with IAController.
+     * Derived from statusDecision == VERIFIED.
+     */
+    @Deprecated
     private Boolean shouldVerify;
 }

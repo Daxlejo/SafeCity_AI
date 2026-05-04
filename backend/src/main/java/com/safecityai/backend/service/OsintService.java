@@ -1,10 +1,14 @@
 package com.safecityai.backend.service;
 
+import com.safecityai.backend.dto.OsintAIResultDTO;
 import com.safecityai.backend.dto.OsintResultDTO;
+import com.safecityai.backend.dto.ReportResponseDTO;
+import com.safecityai.backend.model.OsintNewsArticle;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.ReportSource;
 import com.safecityai.backend.model.enums.ReportStatus;
+import com.safecityai.backend.repository.OsintNewsArticleRepository;
 import com.safecityai.backend.repository.ReportRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,486 +35,630 @@ import java.util.regex.Pattern;
 @Service
 public class OsintService {
 
-        private final RestTemplate restTemplate;
-        private final ObjectMapper objectMapper;
-        private final ReportRepository reportRepository;
-        private final IAClassificationService iaService;
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
+    private final ReportRepository reportRepository;
+    private final OsintNewsArticleRepository newsArticleRepository;
+    private final GeocodingService geocodingService;
+    private final AIClient aiClient;
+    private final NotificationService notificationService;
 
-        @Value("${app.rapidapi.key}")
-        private String rapidApiKey;
+    @Value("${app.rapidapi.key}")
+    private String rapidApiKey;
 
-        @Value("${app.rapidapi.facebook-host}")
-        private String facebookHost;
+    @Value("${app.rapidapi.facebook-host}")
+    private String facebookHost;
 
-        public OsintService(ReportRepository reportRepository,
-                        IAClassificationService iaService) {
-                this.restTemplate = new RestTemplate();
-                this.objectMapper = new ObjectMapper();
-                this.reportRepository = reportRepository;
-                this.iaService = iaService;
+    @Value("${app.osint.scheduler.enabled:true}")
+    private boolean schedulerEnabled;
+
+    @Value("${app.osint.default-city:Pasto}")
+    private String defaultCity;
+
+    @Value("${app.osint.max-items-per-execution:10}")
+    private int maxItemsPerExecution;
+
+    @Value("${app.osint.dedup-radius-meters:500}")
+    private double dedupRadiusMeters;
+
+    @Value("${app.osint.dedup-hours:12}")
+    private int dedupHours;
+
+    // Facebook pages — local Pasto sources
+    private static final List<String> PRIORITY_FB_PAGES = List.of(
+            "Pasto Denuncias",
+            "Nariño Noticias La Original",
+            "La Voz Del pueblo Noticias Nariño");
+
+    public OsintService(ReportRepository reportRepository,
+                        OsintNewsArticleRepository newsArticleRepository,
+                        GeocodingService geocodingService,
+                        AIClient aiClient,
+                        NotificationService notificationService) {
+        this.restTemplate = new RestTemplate();
+        this.objectMapper = new ObjectMapper();
+        this.reportRepository = reportRepository;
+        this.newsArticleRepository = newsArticleRepository;
+        this.geocodingService = geocodingService;
+        this.aiClient = aiClient;
+        this.notificationService = notificationService;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SCHEDULER: Automatic scan every hour
+    // ═══════════════════════════════════════════════════════════
+
+    @Scheduled(fixedRate = 3600000, initialDelay = 60000)
+    public void scheduledScan() {
+        if (!schedulerEnabled) {
+            log.debug("[OSINT] Scheduler disabled, skipping scan");
+            return;
+        }
+        log.info("[OSINT] Executing scheduled scan for '{}'", defaultCity);
+        try {
+            Map<String, Object> result = scanAndClassify(defaultCity);
+            log.info("[OSINT] Scheduled scan completed: {}", result);
+        } catch (Exception e) {
+            log.error("[OSINT] Error in scheduled scan: {}", e.getMessage());
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PIPELINE V2: Scrape → AI Extraction → Geocode → Dedup → Save
+    // ═══════════════════════════════════════════════════════════
+
+    public Map<String, Object> scanAndClassify(String city) {
+        List<OsintResultDTO> rawResults = searchIncidents(city);
+        log.info("[OSINT] scan: {} raw results found for '{}'", rawResults.size(), city);
+
+        // Rate limiting: process max N items per execution
+        List<OsintResultDTO> toProcess = rawResults.stream()
+                .filter(r -> r.getPublishedAt() == null
+                        || !r.getPublishedAt().isBefore(LocalDateTime.now().minusDays(7)))
+                .limit(maxItemsPerExecution)
+                .toList();
+
+        int created = 0;
+        int savedAsNews = 0;
+        int duplicatesSkipped = 0;
+        int discardedByAI = 0;
+        List<Long> reportIds = new ArrayList<>();
+
+        for (OsintResultDTO raw : toProcess) {
+            try {
+                // Step 1: AI entity extraction + classification (single call)
+                OsintAIResultDTO aiResult = extractEntitiesWithAI(raw.getContent());
+                if (aiResult == null || !aiResult.isSecurityIncident()) {
+                    discardedByAI++;
+                    log.debug("[OSINT] Discarded by AI (not security): '{}'",
+                            truncate(raw.getContent(), 60));
+                    continue;
+                }
+
+                // Step 2: Geocode the AI-extracted address
+                double[] coords = geocodeAddress(aiResult.getExactAddress());
+
+                if (coords == null) {
+                    // Cannot geolocate → save as news article ("Noticias Pasto")
+                    saveAsNewsArticle(raw, aiResult);
+                    savedAsNews++;
+                    continue;
+                }
+
+                // Step 3: Geospatial + temporal deduplication
+                if (isDuplicateIncident(aiResult.getIncidentType(), coords[0], coords[1])) {
+                    duplicatesSkipped++;
+                    log.debug("[OSINT] Duplicate detected for {} at [{}, {}]",
+                            aiResult.getIncidentType(), coords[0], coords[1]);
+                    continue;
+                }
+
+                // Step 4: Create Report with AI-enriched data
+                Report report = buildReportFromAI(raw, aiResult, coords);
+                Report saved = reportRepository.save(report);
+                created++;
+                reportIds.add(saved.getId());
+
+                // Step 5: Broadcast new report via WebSocket
+                notificationService.notifyNewReport(convertToDTO(saved));
+                log.info("[OSINT] Report #{} created: {} at [{}, {}] (score: {})",
+                        saved.getId(), aiResult.getIncidentType(),
+                        coords[0], coords[1], aiResult.getTrustScore());
+
+            } catch (Exception e) {
+                log.warn("[OSINT] Error processing item: {}", e.getMessage());
+            }
         }
 
-        // Paginas de Facebook prioritarias de Pasto (fuentes confiables locales)
-        private static final List<String> PRIORITY_FB_PAGES = List.of(
-                        "Pasto Denuncias",
-                        "Nariño Noticias La Original",
-                        "La Voz Del pueblo Noticias Nariño");
+        log.info("[OSINT] Pipeline V2: {} created, {} news, {} duplicates, {} discarded from {} processed",
+                created, savedAsNews, duplicatesSkipped, discardedByAI, toProcess.size());
 
-        // Lugares físicos identificables de Pasto usados para validar ubicabilidad
-        private static final List<String> PASTO_LOCATIONS = List.of(
-                        "panamericana", "pananericana", "lorenzo", "jongovito", "anganoy",
-                        "avenida", "carrera", "calle", "sector", "barrio", "comuna",
-                        "parque", "plaza", "hospital", "clínica", "clinica",
-                        "universidad", "centro comercial", "terminal", "aeropuerto",
-                        "chapal", "aranda", "torobajo", "san ignacio", "miraflores",
-                        "obrero", "chambú", "chambu", "niza", "tamasagra",
-                        "villa flor", "jamondino", "catambuco", "tangua", "chachagui",
-                        "buesaco", "la floresta", "santa barbara", "santa bárbara");
+        return Map.of(
+                "city", city,
+                "found", rawResults.size(),
+                "processed", toProcess.size(),
+                "reportsCreated", created,
+                "savedAsNews", savedAsNews,
+                "duplicatesSkipped", duplicatesSkipped,
+                "discardedByAI", discardedByAI,
+                "reportIds", reportIds);
+    }
 
-        // Términos políticos y mundanos que deben excluirse del OSINT
-        private static final List<String> POLITICAL_BLACKLIST = List.of(
-                        "petro", "alcalde", "gobernacion", "gobernación", "congreso",
-                        "senado", "diputado", "concejal", "presidente", "gobierno",
-                        "politico", "político", "partido", "elecciones", "campaña",
-                        "cultural", "deportivo", "deporte", "festival", "concierto",
-                        "sintetico", "sintético", "empleo", "trabajo", "venta",
-                        "economía", "economia", "impuesto", "plebiscito");
+    // ═══════════════════════════════════════════════════════════
+    // AI ENTITY EXTRACTION: Raw text → structured JSON (single call)
+    // ═══════════════════════════════════════════════════════════
 
-        // ═══════════════════════════════════════════════════════════
-        // SCHEDULER: Escaneo automático cada hora
-        // ═══════════════════════════════════════════════════════════
-        // fixedRate = 3600000ms = 1 hora
-        // initialDelay = 60000ms = 1 minuto (esperar a que la app arranque)
-        // Se puede desactivar con app.osint.scheduler.enabled=false
+    private OsintAIResultDTO extractEntitiesWithAI(String rawText) {
+        if (rawText == null || rawText.isBlank()) return null;
 
-        @Value("${app.osint.scheduler.enabled:true}")
-        private boolean schedulerEnabled;
+        try {
+            String prompt = buildOsintExtractionPrompt(rawText);
+            String aiResponse = aiClient.sendRawPrompt(prompt, "OSINT-AI");
+            return parseAIExtractionResponse(aiResponse);
+        } catch (Exception e) {
+            log.warn("[OSINT-AI] Extraction failed: {}", e.getMessage());
+            return null;
+        }
+    }
 
-        @Value("${app.osint.default-city:Pasto}")
-        private String defaultCity;
+    private String buildOsintExtractionPrompt(String rawText) {
+        return """
+                You are an OSINT analyst for SafeCityAI in Pasto, Colombia.
+                Analyze the following scraped news/social media text and extract structured security information.
+                
+                === TEXT TO ANALYZE ===
+                "%s"
+                
+                === INSTRUCTIONS ===
+                1. Determine if this text describes a REAL security incident (robbery, accident, assault, fire, etc.)
+                2. REJECT: political news, cultural events, sports, employment, opinions, rumors, jokes
+                3. Extract the EXACT physical address or location mentioned (street, neighborhood, landmark)
+                4. Write a clean 1-2 sentence summary of the incident
+                5. Estimate when it happened (ISO 8601 format)
+                6. Assign a trustScore (0-100) based on specificity and credibility
+                
+                === CATEGORIES ===
+                ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER
+                
+                Respond ONLY with this JSON, no additional text:
+                {"isSecurityIncident":<true/false>,"incidentType":"<TYPE>","exactAddress":"<address or empty string>","cleanSummary":"<summary>","estimatedDate":"<ISO 8601 or empty>","trustScore":<0-100>,"shouldVerify":<true if score>=60>}
+                """.formatted(rawText);
+    }
 
-        @Scheduled(fixedRate = 3600000, initialDelay = 60000)
-        public void scheduledScan() {
-                if (!schedulerEnabled) {
-                        log.debug("[OSINT] Scheduler desactivado, saltando scan");
-                        return;
-                }
-                log.info("[OSINT] Ejecutando scan automático para '{}'", defaultCity);
-                try {
-                        Map<String, Object> result = scanAndClassify(defaultCity);
-                        log.info("[OSINT] Scan automático completado: {}", result);
-                } catch (Exception e) {
-                        log.error("[OSINT] Error en scan automático: {}", e.getMessage());
-                }
+    private OsintAIResultDTO parseAIExtractionResponse(String aiResponse) {
+        try {
+            JsonNode json = objectMapper.readTree(aiResponse);
+
+            boolean isIncident = json.path("isSecurityIncident").asBoolean(false);
+
+            IncidentType incidentType;
+            try {
+                incidentType = IncidentType.valueOf(json.path("incidentType").asText("OTHER"));
+            } catch (IllegalArgumentException e) {
+                incidentType = IncidentType.OTHER;
+            }
+
+            return OsintAIResultDTO.builder()
+                    .securityIncident(isIncident)
+                    .incidentType(incidentType)
+                    .exactAddress(json.path("exactAddress").asText(""))
+                    .cleanSummary(json.path("cleanSummary").asText(""))
+                    .estimatedDate(json.path("estimatedDate").asText(""))
+                    .trustScore(json.path("trustScore").asDouble(50.0))
+                    .shouldVerify(json.path("shouldVerify").asBoolean(false))
+                    .build();
+        } catch (Exception e) {
+            log.warn("[OSINT-AI] Failed to parse AI response: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // GEOCODING: Address text → real coordinates
+    // ═══════════════════════════════════════════════════════════
+
+    private double[] geocodeAddress(String address) {
+        if (address == null || address.isBlank()) return null;
+
+        // Append ", Pasto, Colombia" for better geocoding accuracy
+        String fullAddress = address.contains("Pasto") ? address : address + ", Pasto, Colombia";
+        double[] coords = geocodingService.geocode(fullAddress);
+
+        if (coords != null) {
+            log.info("[OSINT-Geocoding] '{}' → [{}, {}]", address, coords[0], coords[1]);
+        } else {
+            log.info("[OSINT-Geocoding] Could not geolocate: '{}'", address);
+        }
+        return coords;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // DEDUPLICATION: Geospatial + temporal via bounding box
+    // ═══════════════════════════════════════════════════════════
+
+    private boolean isDuplicateIncident(IncidentType type, double lat, double lng) {
+        // Convert radius in meters to approximate degrees
+        // At equator: 1° ≈ 111,320m. At Pasto latitude (~1.2°N): negligible cos correction
+        double deltaLat = dedupRadiusMeters / 111320.0;
+        double deltaLng = dedupRadiusMeters / (111320.0 * Math.cos(Math.toRadians(lat)));
+
+        LocalDateTime since = LocalDateTime.now().minusHours(dedupHours);
+
+        return reportRepository.existsNearbyDuplicate(
+                type,
+                lat - deltaLat, lat + deltaLat,
+                lng - deltaLng, lng + deltaLng,
+                since);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NEWS ARTICLE: Save non-geolocatable incidents
+    // ═══════════════════════════════════════════════════════════
+
+    private void saveAsNewsArticle(OsintResultDTO raw, OsintAIResultDTO aiResult) {
+        String contentHash = hashContent(aiResult.getCleanSummary());
+
+        // Dedup by content hash for news articles
+        if (newsArticleRepository.existsByContentHash(contentHash)) {
+            log.debug("[OSINT] News article already exists (hash: {})", contentHash);
+            return;
         }
 
-        public Map<String, Object> scanAndClassify(String city) {
-                // Paso 1: Buscar en todas las fuentes
-                List<OsintResultDTO> osintResults = searchIncidents(city);
-                log.info("[OSINT] scan: {} resultados encontrados para '{}'", osintResults.size(), city);
+        OsintNewsArticle article = OsintNewsArticle.builder()
+                .title(truncate(aiResult.getCleanSummary(), 300))
+                .summary(aiResult.getCleanSummary())
+                .incidentType(aiResult.getIncidentType())
+                .sourceUrl(raw.getSourceUrl())
+                .sourceType(raw.getSourceType() != null ? raw.getSourceType() : ReportSource.SOCIAL_MEDIA)
+                .contentHash(contentHash)
+                .trustScore(aiResult.getTrustScore())
+                .estimatedDate(parseEstimatedDate(aiResult.getEstimatedDate()))
+                .build();
 
-                int created = 0;
-                int skippedDuplicates = 0;
-                List<Long> reportIds = new ArrayList<>();
+        newsArticleRepository.save(article);
+        log.info("[OSINT] Saved as news article: '{}'", truncate(aiResult.getCleanSummary(), 60));
+    }
 
-                // Paso 2 y 3: Por cada resultado, crear reporte y clasificar
-                for (OsintResultDTO osint : osintResults) {
-                        try {
-                                // Filtro 1: No procesar incidentes viejos (mas de 7 dias)
-                                if (osint.getPublishedAt() != null &&
-                                                osint.getPublishedAt().isBefore(LocalDateTime.now().minusDays(7))) {
-                                        continue;
-                                }
+    // ═══════════════════════════════════════════════════════════
+    // REPORT BUILDER: Constructs Report entity from AI data
+    // ═══════════════════════════════════════════════════════════
 
-                                // Filtro 2: DEDUPLICACIÓN — evitar reportes duplicados
-                                String contentHash = hashContent(osint.getContent());
-                                if (reportRepository.existsByDescriptionHash(contentHash)) {
-                                        skippedDuplicates++;
-                                        continue;
-                                }
+    private Report buildReportFromAI(OsintResultDTO raw, OsintAIResultDTO aiResult, double[] coords) {
+        ReportStatus status = aiResult.getTrustScore() >= 60 && aiResult.isShouldVerify()
+                ? ReportStatus.VERIFIED
+                : ReportStatus.PENDING;
 
-                                // Filtro 3 (OSINT EXCLUSIVO): Solo crear si el texto menciona
-                                // un lugar físico verificable de Pasto. Esto NO aplica a reportes
-                                // ciudadanos, que siempre tienen GPS o selección en mapa.
-                                if (!isLocatable(osint.getContent())) {
-                                        log.info("[OSINT] Descartado por no ser ubicable: '{}'",
-                                                        osint.getContent().substring(0, Math.min(osint.getContent().length(), 60)));
-                                        skippedDuplicates++; // contar como saltado
-                                        continue;
-                                }
+        return Report.builder()
+                .description(aiResult.getCleanSummary())
+                .incidentType(aiResult.getIncidentType())
+                .address(aiResult.getExactAddress())
+                .latitude(coords[0])
+                .longitude(coords[1])
+                .source(raw.getSourceType() != null ? raw.getSourceType() : ReportSource.SOCIAL_MEDIA)
+                .status(status)
+                .trustScore(aiResult.getTrustScore())
+                .aiAnalysis("[OSINT V2] " + aiResult.getCleanSummary())
+                .reportDate(LocalDateTime.now())
+                .incidentDate(parseEstimatedDate(aiResult.getEstimatedDate()))
+                .build();
+    }
 
-                                // Crear el reporte en la BD
-                                Report report = Report.builder()
-                                                .description(osint.getContent())
-                                                .descriptionHash(contentHash)
-                                                .incidentType(IncidentType.OTHER)
-                                                .address(osint.getDetectedLocation())
-                                                .latitude(osint.getLatitude())
-                                                .longitude(osint.getLongitude())
-                                                .source(osint.getSourceType() != null
-                                                                ? osint.getSourceType()
-                                                                : ReportSource.SOCIAL_MEDIA)
-                                                .status(ReportStatus.PENDING)
-                                                .reportDate(LocalDateTime.now())
-                                                .build();
+    private ReportResponseDTO convertToDTO(Report report) {
+        return ReportResponseDTO.builder()
+                .id(report.getId())
+                .description(report.getDescription())
+                .incidentType(report.getIncidentType())
+                .address(report.getAddress())
+                .status(report.getStatus())
+                .source(report.getSource())
+                .latitude(report.getLatitude())
+                .longitude(report.getLongitude())
+                .photoUrl(report.getPhotoUrl())
+                .trustScore(report.getTrustScore())
+                .aiAnalysis(report.getAiAnalysis())
+                .zoneId(report.getZoneId())
+                .reportDate(report.getReportDate())
+                .incidentDate(report.getIncidentDate())
+                .build();
+    }
 
-                                Report saved = reportRepository.save(report);
-                                created++;
-                                reportIds.add(saved.getId());
+    // ═══════════════════════════════════════════════════════════
+    // SEARCH: Aggregate all sources (preview, no side effects)
+    // ═══════════════════════════════════════════════════════════
 
-                                // Clasificar con IA en BACKGROUND (no bloquea este hilo)
-                                iaService.classifyAsync(saved.getId());
+    public List<OsintResultDTO> searchIncidents(String city) {
+        List<OsintResultDTO> results = new ArrayList<>();
 
-                        } catch (Exception e) {
-                                log.warn("[OSINT] Error creando reporte: {}", e.getMessage());
-                        }
-                }
-
-                log.info("[OSINT] pipeline: {} creados, {} duplicados ignorados de {} encontrados",
-                                created, skippedDuplicates, osintResults.size());
-
-                return Map.of(
-                                "city", city,
-                                "found", osintResults.size(),
-                                "reportsCreated", created,
-                                "duplicatesSkipped", skippedDuplicates,
-                                "reportIds", reportIds);
+        // Source 1 (PRIORITY): Local Pasto Facebook pages
+        try {
+            List<OsintResultDTO> priorityResults = searchPriorityPages();
+            results.addAll(priorityResults);
+            log.info("FB Priority: {} results", priorityResults.size());
+        } catch (Exception e) {
+            log.warn("Error in FB priority pages: {}", e.getMessage());
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // BUSQUEDA: solo buscar sin crear reportes (para preview)
-        // ═══════════════════════════════════════════════════════════
-
-        public List<OsintResultDTO> searchIncidents(String city) {
-                List<OsintResultDTO> results = new ArrayList<>();
-
-                // Fuente 1 (PRIORIDAD): Paginas Facebook locales de Pasto
-                try {
-                        List<OsintResultDTO> priorityResults = searchPriorityPages();
-                        results.addAll(priorityResults);
-                        log.info("FB Prioritarias: {} resultados", priorityResults.size());
-                } catch (Exception e) {
-                        log.warn("Error en FB prioritarias: {}", e.getMessage());
-                }
-
-                // Fuente 2: Google News RSS (gratis, ilimitado)
-                try {
-                        List<OsintResultDTO> newsResults = searchGoogleNews(city);
-                        results.addAll(newsResults);
-                        log.info("Google News: {} resultados para '{}'", newsResults.size(), city);
-                } catch (Exception e) {
-                        log.warn("Error en Google News: {}", e.getMessage());
-                }
-
-                // Fuente 3: Facebook busqueda general
-                try {
-                        List<OsintResultDTO> fbResults = searchFacebook(city);
-                        results.addAll(fbResults);
-                        log.info("Facebook general: {} resultados para '{}'", fbResults.size(), city);
-                } catch (Exception e) {
-                        log.warn("Error en Facebook Scraper: {}", e.getMessage());
-                }
-
-                log.info("OSINT total: {} resultados combinados", results.size());
-                return results;
+        // Source 2: Google News RSS (free, unlimited)
+        try {
+            List<OsintResultDTO> newsResults = searchGoogleNews(city);
+            results.addAll(newsResults);
+            log.info("Google News: {} results for '{}'", newsResults.size(), city);
+        } catch (Exception e) {
+            log.warn("Error in Google News: {}", e.getMessage());
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // FUENTE 1 (PRIORIDAD): Paginas FB locales de Pasto
-        // ═══════════════════════════════════════════════════════════
-
-        private List<OsintResultDTO> searchPriorityPages() {
-                List<OsintResultDTO> results = new ArrayList<>();
-
-                for (String pageName : PRIORITY_FB_PAGES) {
-                        try {
-                                String url = String.format(
-                                                "https://%s/search/pages?query=%s",
-                                                facebookHost, pageName.replace(" ", "+"));
-
-                                HttpHeaders headers = new HttpHeaders();
-                                headers.set("x-rapidapi-key", rapidApiKey);
-                                headers.set("x-rapidapi-host", facebookHost);
-
-                                HttpEntity<String> request = new HttpEntity<>(headers);
-
-                                ResponseEntity<String> response = restTemplate.exchange(
-                                                url, HttpMethod.GET, request, String.class);
-
-                                String body = response.getBody();
-                                if (body == null)
-                                        continue;
-
-                                JsonNode root = objectMapper.readTree(body);
-                                JsonNode items = root.isArray() ? root : root.path("results");
-
-                                if (items.isArray()) {
-                                        for (JsonNode item : items) {
-                                                String name = item.has("name") ? item.get("name").asText() : "";
-                                                String description = item.has("description")
-                                                                ? item.get("description").asText()
-                                                                : "";
-                                                String pageUrl = item.has("url") ? item.get("url").asText()
-                                                                : item.has("link") ? item.get("link").asText() : "";
-
-                                                String content = !description.isBlank() ? description : name;
-
-                                                LocalDateTime pubDate = LocalDateTime.now();
-                                                try {
-                                                        if (item.has("created_time")) {
-                                                                pubDate = ZonedDateTime.parse(
-                                                                                item.get("created_time").asText(),
-                                                                                DateTimeFormatter.ISO_DATE_TIME)
-                                                                                .toLocalDateTime();
-                                                        } else if (item.has("time")) {
-                                                                pubDate = ZonedDateTime.parse(item.get("time").asText(),
-                                                                                DateTimeFormatter.ISO_DATE_TIME)
-                                                                                .toLocalDateTime();
-                                                        }
-                                                } catch (Exception e) {
-                                                }
-
-                                                if (!content.isBlank()) {
-                                                        results.add(OsintResultDTO.builder()
-                                                                        .title("[FB Prioritaria] " + name)
-                                                                        .content(content)
-                                                                        .sourceUrl(pageUrl)
-                                                                        .sourceType(ReportSource.SOCIAL_MEDIA)
-                                                                        .detectedLocation("Pasto")
-                                                                        .publishedAt(pubDate)
-                                                                        .confidence(0.80)
-                                                                        .build());
-                                                }
-                                        }
-                                }
-
-                                log.info("FB Prioritaria '{}': OK", pageName);
-                        } catch (Exception e) {
-                                log.warn("Error scraping '{}': {}", pageName, e.getMessage());
-                        }
-                }
-
-                return results;
+        // Source 3: Facebook general search
+        try {
+            List<OsintResultDTO> fbResults = searchFacebook(city);
+            results.addAll(fbResults);
+            log.info("Facebook general: {} results for '{}'", fbResults.size(), city);
+        } catch (Exception e) {
+            log.warn("Error in Facebook Scraper: {}", e.getMessage());
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // FUENTE 2: Google News RSS (gratis, sin limite)
-        // ═══════════════════════════════════════════════════════════
+        log.info("OSINT total: {} combined results", results.size());
+        return results;
+    }
 
-        private List<OsintResultDTO> searchGoogleNews(String city) {
-                List<OsintResultDTO> results = new ArrayList<>();
+    // ═══════════════════════════════════════════════════════════
+    // SOURCE 1 (PRIORITY): Local Pasto FB pages
+    // ═══════════════════════════════════════════════════════════
 
-                // ─── Sesión 1: incidentes generales en la ciudad ───
-                String query1 = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio+OR+choque)+" + city.replace(" ", "+");
-                results.addAll(fetchGoogleNewsRSS(query1, city, 8));
+    private List<OsintResultDTO> searchPriorityPages() {
+        List<OsintResultDTO> results = new ArrayList<>();
 
-                // ─── Sesión 2: incidentes geolocalizados con vías/barrios de Pasto ───
-                // Fuerza que la noticia mencione un lugar físico real
-                String query2 = "(accidente+OR+robo+OR+choque+OR+herido+OR+atropello)+(panamericana+OR+lorenzo+OR+anganoy+OR+avenida+OR+sector+OR+barrio)+" + city.replace(" ", "+");
-                results.addAll(fetchGoogleNewsRSS(query2, city, 8));
-
-                log.info("Google News total (ambas sesiones): {} resultados para '{}'", results.size(), city);
-                return results;
-        }
-
-        /** Descarga y parsea un RSS de Google News para una query dada */
-        private List<OsintResultDTO> fetchGoogleNewsRSS(String query, String city, int maxItems) {
-                List<OsintResultDTO> results = new ArrayList<>();
+        for (String pageName : PRIORITY_FB_PAGES) {
+            try {
                 String url = String.format(
-                                "https://news.google.com/rss/search?q=%s&hl=es-419&gl=CO&ceid=CO:es-419",
-                                query);
-
-                try {
-                        ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-                        String xml = response.getBody();
-                        if (xml == null) return results;
-
-                        Pattern itemPattern = Pattern.compile("<item>(.*?)</item>", Pattern.DOTALL);
-                        Matcher itemMatcher = itemPattern.matcher(xml);
-
-                        int count = 0;
-                        while (itemMatcher.find() && count < maxItems) {
-                                String item = itemMatcher.group(1);
-                                String title = extractXmlTag(item, "title");
-                                String link = extractXmlTag(item, "link");
-                                String pubDateStr = extractXmlTag(item, "pubDate");
-
-                                LocalDateTime pubDate = LocalDateTime.now();
-                                try {
-                                        if (!pubDateStr.isBlank()) {
-                                                pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
-                                                                .toLocalDateTime();
-                                        }
-                                } catch (Exception e) { /* ignorar fecha malformada */ }
-
-                                if (isSecurityRelated(title)) {
-                                        results.add(OsintResultDTO.builder()
-                                                        .title(title)
-                                                        .content(title)
-                                                        .sourceUrl(link)
-                                                        .sourceType(ReportSource.INSTITUTIONAL)
-                                                        .detectedLocation(city)
-                                                        .publishedAt(pubDate)
-                                                        .confidence(0.70)
-                                                        .build());
-                                        count++;
-                                }
-                        }
-                } catch (Exception e) {
-                        log.warn("Error en Google News RSS (query={}): {}", query, e.getMessage());
-                }
-                return results;
-        }
-
-        // ═══════════════════════════════════════════════════════════
-        // FUENTE 3: Facebook Scraper general via RapidAPI
-        // ═══════════════════════════════════════════════════════════
-
-        private List<OsintResultDTO> searchFacebook(String city) {
-                List<OsintResultDTO> results = new ArrayList<>();
-
-                // Busqueda mucho más especifica, no solo "seguridad"
-                String query = city.replace(" ", "+") + "+(robo|atraco|accidente|hurto|choque|homicidio)";
-                String url = String.format(
-                                "https://%s/search/posts?query=%s&count=10",
-                                facebookHost, query);
+                        "https://%s/search/pages?query=%s",
+                        facebookHost, pageName.replace(" ", "+"));
 
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("x-rapidapi-key", rapidApiKey);
                 headers.set("x-rapidapi-host", facebookHost);
-                headers.setContentType(MediaType.APPLICATION_JSON);
 
                 HttpEntity<String> request = new HttpEntity<>(headers);
 
-                try {
-                        ResponseEntity<String> response = restTemplate.exchange(
-                                        url, HttpMethod.GET, request, String.class);
+                ResponseEntity<String> response = restTemplate.exchange(
+                        url, HttpMethod.GET, request, String.class);
 
-                        String body = response.getBody();
-                        if (body == null)
-                                return results;
+                String body = response.getBody();
+                if (body == null) continue;
 
-                        JsonNode root = objectMapper.readTree(body);
-                        JsonNode items = root.isArray() ? root : root.path("results");
+                JsonNode root = objectMapper.readTree(body);
+                JsonNode items = root.isArray() ? root : root.path("results");
 
-                        if (items.isArray()) {
-                                for (JsonNode item : items) {
-                                        String text = item.has("text") ? item.get("text").asText()
-                                                        : item.has("message") ? item.get("message").asText()
-                                                                        : item.has("name") ? item.get("name").asText()
-                                                                                        : "";
+                if (items.isArray()) {
+                    for (JsonNode item : items) {
+                        String name = item.has("name") ? item.get("name").asText() : "";
+                        String description = item.has("description")
+                                ? item.get("description").asText() : "";
+                        String pageUrl = item.has("url") ? item.get("url").asText()
+                                : item.has("link") ? item.get("link").asText() : "";
 
-                                        String postUrl = item.has("url") ? item.get("url").asText()
-                                                        : item.has("link") ? item.get("link").asText() : "";
+                        String content = !description.isBlank() ? description : name;
 
-                                        LocalDateTime pubDate = LocalDateTime.now();
-                                        try {
-                                                if (item.has("created_time")) {
-                                                        pubDate = ZonedDateTime
-                                                                        .parse(item.get("created_time").asText(),
-                                                                                        DateTimeFormatter.ISO_DATE_TIME)
-                                                                        .toLocalDateTime();
-                                                } else if (item.has("time")) {
-                                                        pubDate = ZonedDateTime
-                                                                        .parse(item.get("time").asText(),
-                                                                                        DateTimeFormatter.ISO_DATE_TIME)
-                                                                        .toLocalDateTime();
-                                                }
-                                        } catch (Exception e) {
-                                        }
+                        LocalDateTime pubDate = parseFacebookDate(item);
 
-                                        if (!text.isBlank()) {
-                                                results.add(OsintResultDTO.builder()
-                                                                .title(text.length() > 100
-                                                                                ? text.substring(0, 100) + "..."
-                                                                                : text)
-                                                                .content(text)
-                                                                .sourceUrl(postUrl)
-                                                                .sourceType(ReportSource.SOCIAL_MEDIA)
-                                                                .detectedLocation(city)
-                                                                .publishedAt(pubDate)
-                                                                .confidence(0.50)
-                                                                .build());
-                                        }
-                                }
+                        if (!content.isBlank()) {
+                            results.add(OsintResultDTO.builder()
+                                    .title("[FB Priority] " + name)
+                                    .content(content)
+                                    .sourceUrl(pageUrl)
+                                    .sourceType(ReportSource.SOCIAL_MEDIA)
+                                    .detectedLocation("Pasto")
+                                    .publishedAt(pubDate)
+                                    .confidence(0.80)
+                                    .build());
                         }
-
-                } catch (Exception e) {
-                        log.warn("Facebook scraper error: {}", e.getMessage());
+                    }
                 }
 
-                return results;
+                log.info("FB Priority '{}': OK", pageName);
+            } catch (Exception e) {
+                log.warn("Error scraping '{}': {}", pageName, e.getMessage());
+            }
         }
 
-        // ═══════════════════════════════════════════════════════════
-        // HELPERS
-        // ═══════════════════════════════════════════════════════════
+        return results;
+    }
 
-        private String extractXmlTag(String xml, String tag) {
-                Pattern pattern = Pattern.compile("<" + tag + ">(.*?)</" + tag + ">", Pattern.DOTALL);
-                Matcher matcher = pattern.matcher(xml);
-                if (matcher.find()) {
-                        return matcher.group(1)
-                                        .replace("<![CDATA[", "")
-                                        .replace("]]>", "")
-                                        .trim();
-                }
-                return "";
-        }
+    // ═══════════════════════════════════════════════════════════
+    // SOURCE 2: Google News RSS (free, unlimited)
+    // ═══════════════════════════════════════════════════════════
 
-        private boolean isSecurityRelated(String title) {
-                if (title == null || title.isBlank())
-                        return false;
-                String lower = title.toLowerCase();
+    private List<OsintResultDTO> searchGoogleNews(String city) {
+        List<OsintResultDTO> results = new ArrayList<>();
 
-                // ─── Lista negra: excluir términos políticos o mundanos ───
-                for (String blocked : POLITICAL_BLACKLIST) {
-                        if (lower.contains(blocked)) {
-                                log.debug("[OSINT] Excluido por lista negra ('{}'): {}", blocked, title);
-                                return false;
-                        }
-                }
+        // Session 1: general incidents
+        String query1 = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio+OR+choque)+"
+                + city.replace(" ", "+");
+        results.addAll(fetchGoogleNewsRSS(query1, city, 8));
 
-                // ─── Lista blanca: debe contener al menos un término de incidente ───
-                return lower.contains("robo") || lower.contains("hurto") || lower.contains("atraco")
-                                || lower.contains("accidente") || lower.contains("homicidio")
-                                || lower.contains("asalto") || lower.contains("violencia")
-                                || lower.contains("emergencia") || lower.contains("incendio")
-                                || lower.contains("herido") || lower.contains("muerto")
-                                || lower.contains("choque") || lower.contains("atropello")
-                                || lower.contains("derrumbe") || lower.contains("inundacion")
-                                || lower.contains("inundación") || lower.contains("explosion")
-                                || lower.contains("explosión") || lower.contains("fuga de gas");
-        }
+        // Session 2: geolocated incidents with Pasto landmarks
+        String query2 = "(accidente+OR+robo+OR+choque+OR+herido+OR+atropello)"
+                + "+(panamericana+OR+lorenzo+OR+anganoy+OR+avenida+OR+sector+OR+barrio)+"
+                + city.replace(" ", "+");
+        results.addAll(fetchGoogleNewsRSS(query2, city, 8));
 
-        /**
-         * Verifica si el texto menciona al menos un lugar físico identificable de Pasto.
-         * Usado EXCLUSIVAMENTE para filtrar resultados OSINT antes de crear reportes.
-         * Los reportes ciudadanos NO pasan por este filtro (tienen GPS o selección en mapa).
-         */
-        private boolean isLocatable(String text) {
-                if (text == null || text.isBlank()) return false;
-                String lower = text.toLowerCase();
-                for (String location : PASTO_LOCATIONS) {
-                        if (lower.contains(location)) return true;
-                }
-                return false;
-        }
+        log.info("Google News total (both sessions): {} results for '{}'", results.size(), city);
+        return results;
+    }
 
-        /**
-         * Genera un hash MD5 de la descripción para deduplicación.
-         * Normaliza el texto (lowercase, trim, colapsar espacios) antes de hashear.
-         */
-        private String hashContent(String content) {
-                if (content == null || content.isBlank()) return "";
+    private List<OsintResultDTO> fetchGoogleNewsRSS(String query, String city, int maxItems) {
+        List<OsintResultDTO> results = new ArrayList<>();
+        String url = String.format(
+                "https://news.google.com/rss/search?q=%s&hl=es-419&gl=CO&ceid=CO:es-419",
+                query);
+
+        try {
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            String xml = response.getBody();
+            if (xml == null) return results;
+
+            Pattern itemPattern = Pattern.compile("<item>(.*?)</item>", Pattern.DOTALL);
+            Matcher itemMatcher = itemPattern.matcher(xml);
+
+            int count = 0;
+            while (itemMatcher.find() && count < maxItems) {
+                String item = itemMatcher.group(1);
+                String title = extractXmlTag(item, "title");
+                String link = extractXmlTag(item, "link");
+                String pubDateStr = extractXmlTag(item, "pubDate");
+
+                LocalDateTime pubDate = LocalDateTime.now();
                 try {
-                        String normalized = content.toLowerCase().trim().replaceAll("\\s+", " ");
-                        MessageDigest md = MessageDigest.getInstance("MD5");
-                        byte[] digest = md.digest(normalized.getBytes(StandardCharsets.UTF_8));
-                        return String.format("%032x", new BigInteger(1, digest));
-                } catch (Exception e) {
-                        // Fallback: usar hashCode si MD5 falla
-                        return String.valueOf(content.hashCode());
+                    if (!pubDateStr.isBlank()) {
+                        pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
+                                .toLocalDateTime();
+                    }
+                } catch (Exception e) { /* ignore malformed date */ }
+
+                // All results pass through — AI does the filtering now
+                if (!title.isBlank()) {
+                    results.add(OsintResultDTO.builder()
+                            .title(title)
+                            .content(title)
+                            .sourceUrl(link)
+                            .sourceType(ReportSource.INSTITUTIONAL)
+                            .detectedLocation(city)
+                            .publishedAt(pubDate)
+                            .confidence(0.70)
+                            .build());
+                    count++;
                 }
+            }
+        } catch (Exception e) {
+            log.warn("Error in Google News RSS (query={}): {}", query, e.getMessage());
         }
+        return results;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SOURCE 3: Facebook general search via RapidAPI
+    // ═══════════════════════════════════════════════════════════
+
+    private List<OsintResultDTO> searchFacebook(String city) {
+        List<OsintResultDTO> results = new ArrayList<>();
+
+        String query = city.replace(" ", "+") + "+(robo|atraco|accidente|hurto|choque|homicidio)";
+        String url = String.format(
+                "https://%s/search/posts?query=%s&count=10",
+                facebookHost, query);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-rapidapi-key", rapidApiKey);
+        headers.set("x-rapidapi-host", facebookHost);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        HttpEntity<String> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, request, String.class);
+
+            String body = response.getBody();
+            if (body == null) return results;
+
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode items = root.isArray() ? root : root.path("results");
+
+            if (items.isArray()) {
+                for (JsonNode item : items) {
+                    String text = item.has("text") ? item.get("text").asText()
+                            : item.has("message") ? item.get("message").asText()
+                            : item.has("name") ? item.get("name").asText() : "";
+
+                    String postUrl = item.has("url") ? item.get("url").asText()
+                            : item.has("link") ? item.get("link").asText() : "";
+
+                    LocalDateTime pubDate = parseFacebookDate(item);
+
+                    if (!text.isBlank()) {
+                        results.add(OsintResultDTO.builder()
+                                .title(truncate(text, 100))
+                                .content(text)
+                                .sourceUrl(postUrl)
+                                .sourceType(ReportSource.SOCIAL_MEDIA)
+                                .detectedLocation(city)
+                                .publishedAt(pubDate)
+                                .confidence(0.50)
+                                .build());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Facebook scraper error: {}", e.getMessage());
+        }
+
+        return results;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════
+
+    private String extractXmlTag(String xml, String tag) {
+        Pattern pattern = Pattern.compile("<" + tag + ">(.*?)</" + tag + ">", Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(xml);
+        if (matcher.find()) {
+            return matcher.group(1)
+                    .replace("<![CDATA[", "")
+                    .replace("]]>", "")
+                    .trim();
+        }
+        return "";
+    }
+
+    private LocalDateTime parseFacebookDate(JsonNode item) {
+        try {
+            if (item.has("created_time")) {
+                return ZonedDateTime.parse(
+                                item.get("created_time").asText(),
+                                DateTimeFormatter.ISO_DATE_TIME)
+                        .toLocalDateTime();
+            } else if (item.has("time")) {
+                return ZonedDateTime.parse(
+                                item.get("time").asText(),
+                                DateTimeFormatter.ISO_DATE_TIME)
+                        .toLocalDateTime();
+            }
+        } catch (Exception e) {
+            // Fallback to current time
+        }
+        return LocalDateTime.now();
+    }
+
+    private LocalDateTime parseEstimatedDate(String isoDate) {
+        if (isoDate == null || isoDate.isBlank()) return null;
+        try {
+            return LocalDateTime.parse(isoDate, DateTimeFormatter.ISO_DATE_TIME);
+        } catch (Exception e) {
+            try {
+                return LocalDateTime.parse(isoDate, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+            } catch (Exception e2) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * SHA-256 hash for news article content deduplication.
+     */
+    private String hashContent(String content) {
+        if (content == null || content.isBlank()) return "";
+        try {
+            String normalized = content.toLowerCase().trim().replaceAll("\\s+", " ");
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(normalized.getBytes(StandardCharsets.UTF_8));
+            return String.format("%064x", new BigInteger(1, digest));
+        } catch (Exception e) {
+            return String.valueOf(content.hashCode());
+        }
+    }
+
+    private String truncate(String text, int maxLength) {
+        if (text == null) return "";
+        return text.length() > maxLength ? text.substring(0, maxLength) + "..." : text;
+    }
 }
