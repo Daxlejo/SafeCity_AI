@@ -8,7 +8,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -26,28 +25,16 @@ public class FileUploadController {
     /**
      * POST /api/v1/uploads → sube una foto
      * 
-     * El frontend envia un formulario con un campo "file" que es la imagen.
-     * El backend la guarda y devuelve la URL para accederla.
-     * 
-     * Ejemplo de respuesta:
-     * {
-     *   "fileName": "a1b2c3d4-e5f6.jpg",
-     *   "photoUrl": "http://localhost:8080/api/v1/uploads/a1b2c3d4-e5f6.jpg"
-     * }
+     * Devuelve solo el fileName. El frontend construye la URL completa
+     * dinámicamente con VITE_BACKEND_URL para evitar URLs rotas tras redeploys.
      */
     @PostMapping
     public ResponseEntity<Map<String, String>> upload(@RequestParam("file") MultipartFile file) {
         String fileName = fileUploadService.uploadFile(file);
 
-        // Construir la URL completa para acceder a la foto
-        String photoUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/api/v1/uploads/")
-                .path(fileName)
-                .toUriString();
-
         return ResponseEntity.ok(Map.of(
                 "fileName", fileName,
-                "photoUrl", photoUrl
+                "photoUrl", fileName
         ));
     }
 

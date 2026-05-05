@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -130,14 +132,13 @@ public class IAClassificationService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // STATUS HANDLERS
+    // STATUS HANDLERS — WebSocket broadcasts happen AFTER commit
     // ═══════════════════════════════════════════════════════════════
 
     private void handleVerified(Report report, User owner, IAClassificationDTO result,
             boolean typeChanged, IncidentType originalType) {
         report.setStatus(ReportStatus.VERIFIED);
         reportRepository.save(report);
-        notificationService.notifyReportUpdated(convertToDTO(report));
         log.info("[IA-Async] Report #{} VERIFIED (score: {})", report.getId(), result.getTrustScore());
 
         if (owner != null) {
@@ -152,6 +153,15 @@ public class IAClassificationService {
             String type = typeChanged ? "WARNING" : "INFO";
             notificationUserService.createNotification(owner, report, title, msg, type);
         }
+
+        // Broadcast WebSocket DESPUÉS del commit para evitar notificaciones fantasma
+        ReportResponseDTO dto = convertToDTO(report);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                notificationService.notifyReportUpdated(dto);
+            }
+        });
     }
 
     private void handleRejected(Report report, User owner, IAClassificationDTO result) {
@@ -168,15 +178,22 @@ public class IAClassificationService {
         }
 
         log.info("[IA-Async] Report #{} REJECTED (score: {})", report.getId(), result.getTrustScore());
+        Long deletedId = report.getId();
         reportRepository.delete(report);
-        notificationService.notifyReportDeleted(report.getId());
+
+        // Broadcast WebSocket DESPUÉS del commit
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                notificationService.notifyReportDeleted(deletedId);
+            }
+        });
     }
 
     private void handlePending(Report report, User owner, IAClassificationDTO result,
             boolean typeChanged, IncidentType originalType) {
         report.setStatus(ReportStatus.PENDING);
         reportRepository.save(report);
-        notificationService.notifyReportUpdated(convertToDTO(report));
         log.info("[IA-Async] Report #{} remains PENDING for manual review (score: {})",
                 report.getId(), result.getTrustScore());
 
@@ -188,6 +205,15 @@ public class IAClassificationService {
             notificationUserService.createNotification(owner, report,
                     "Reporte en revisión", msg, typeChanged ? "WARNING" : "INFO");
         }
+
+        // Broadcast WebSocket DESPUÉS del commit
+        ReportResponseDTO dto = convertToDTO(report);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                notificationService.notifyReportUpdated(dto);
+            }
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════
