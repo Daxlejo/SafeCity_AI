@@ -38,4 +38,6 @@ build/
 ### ENV ###
 *.env
 
-
+### Agents & Graphs ###
+graphify-out/
+.agents/

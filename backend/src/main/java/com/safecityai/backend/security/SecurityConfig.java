@@ -70,14 +70,25 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/zones/**").permitAll()
                         .requestMatchers("/api/v1/zones/**").hasRole("ADMIN")
                         
+                        // Stats públicos: heatmap y zona peligrosa semanal (necesarios para el mapa)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/stats/heatmap").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/stats/dangerous-zone-week").permitAll()
+
                         // Los stats completos son estrictamente para administradores
                         .requestMatchers(HttpMethod.GET, "/api/v1/stats/**").hasRole("ADMIN")
 
-                        // OSINT: publico para permitir busquedas y triggers automaticos
-                        .requestMatchers("/api/v1/osint/**").permitAll()
+                        // OSINT: noticias y búsquedas son públicas; config y trigger requieren ADMIN
+                        .requestMatchers(HttpMethod.GET, "/api/v1/osint/news").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/osint/search").permitAll()
+                        .requestMatchers("/api/v1/osint/config/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/osint/trigger").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/osint/scan").hasRole("ADMIN")
 
                         // Fotos: GET es publico para que se vean en el frontend
                         .requestMatchers(HttpMethod.GET, "/api/v1/uploads/**").permitAll()
+
+                        // Admin: todo requiere rol ADMIN (incluye logs de auditoría)
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
                         // Todo lo demás requiere autenticación
                         .anyRequest().authenticated())

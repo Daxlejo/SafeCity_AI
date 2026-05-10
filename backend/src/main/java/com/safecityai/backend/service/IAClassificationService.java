@@ -156,12 +156,7 @@ public class IAClassificationService {
 
         // Broadcast WebSocket DESPUÉS del commit para evitar notificaciones fantasma
         ReportResponseDTO dto = convertToDTO(report);
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                notificationService.notifyReportUpdated(dto);
-            }
-        });
+        broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
     }
 
     private void handleRejected(Report report, User owner, IAClassificationDTO result) {
@@ -182,12 +177,7 @@ public class IAClassificationService {
         reportRepository.delete(report);
 
         // Broadcast WebSocket DESPUÉS del commit
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                notificationService.notifyReportDeleted(deletedId);
-            }
-        });
+        broadcastAfterCommit(() -> notificationService.notifyReportDeleted(deletedId));
     }
 
     private void handlePending(Report report, User owner, IAClassificationDTO result,
@@ -208,12 +198,7 @@ public class IAClassificationService {
 
         // Broadcast WebSocket DESPUÉS del commit
         ReportResponseDTO dto = convertToDTO(report);
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                notificationService.notifyReportUpdated(dto);
-            }
-        });
+        broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -348,6 +333,26 @@ public class IAClassificationService {
         userRepository.save(user);
         log.info("[TrustLevel] User {} adjusted: {} → {} (delta: {})",
                 user.getId(), (int) current, (int) newLevel, (delta >= 0 ? "+" : "") + (int) delta);
+    }
+
+    /**
+     * Ejecuta un Runnable después del commit transaccional, o de inmediato
+     * si no hay transacción activa (ej. en tests unitarios).
+     * Esto garantiza que las notificaciones WebSocket se envían tanto
+     * en producción (post-commit) como en tests (directo).
+     */
+    private void broadcastAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            // Sin transacción activa (test unitario) → ejecutar directo
+            action.run();
+        }
     }
 
     private ReportResponseDTO convertToDTO(Report report) {

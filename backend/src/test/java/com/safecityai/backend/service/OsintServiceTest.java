@@ -1,6 +1,7 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.OsintResultDTO;
+import com.safecityai.backend.model.OsintConfig;
 import com.safecityai.backend.model.OsintNewsArticle;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.enums.IncidentType;
@@ -38,6 +39,7 @@ class OsintServiceTest {
     @Mock private GeocodingService geocodingService;
     @Mock private AIClient aiClient;
     @Mock private NotificationService notificationService;
+    @Mock private OsintConfigService osintConfigService;
 
     @InjectMocks
     private OsintService osintService;
@@ -222,6 +224,9 @@ class OsintServiceTest {
         @DisplayName("Scheduler desactivado → no ejecuta scan")
         void schedulerDisabled_shouldSkip() {
             ReflectionTestUtils.setField(osintService, "schedulerEnabled", false);
+
+            OsintConfig mockConfig = OsintConfig.builder().enabled(true).build();
+            when(osintConfigService.getActiveConfig()).thenReturn(mockConfig);
 
             osintService.scheduledScan();
 

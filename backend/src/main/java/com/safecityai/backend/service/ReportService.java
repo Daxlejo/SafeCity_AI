@@ -1,11 +1,14 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.ReportCreateDTO;
+import com.safecityai.backend.dto.ReportQuotaDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
+import com.safecityai.backend.exception.RateLimitExceededException;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.ReportStatus;
+import com.safecityai.backend.model.enums.UserRole;
 import com.safecityai.backend.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +18,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 
 @Slf4j
 @Service
@@ -55,6 +62,16 @@ public class ReportService {
             try {
                 User user = userService.findByEmail(userEmail);
                 report.setReportedBy(user);
+
+                // ═══════════════ RATE-LIMITING POR TRUESCORE ═══════════════
+                // Administradores no tienen límite.
+                // Los demás usuarios tienen un máximo de reportes por hora fija
+                // (ej. 2:00-2:59, 3:00-3:59) según su nivel de confianza.
+                if (user.getRole() != UserRole.ADMIN) {
+                    enforceRateLimit(user);
+                }
+            } catch (RateLimitExceededException e) {
+                throw e; // Re-lanzar para que el GlobalExceptionHandler la maneje
             } catch (Exception e) {
                 log.warn("No se pudo vincular usuario {} al reporte: {}", userEmail, e.getMessage());
             }
@@ -150,8 +167,75 @@ public class ReportService {
         log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
     }
 
+    // ═══════════════ RATE-LIMITING: CONSULTA PÚBLICA ═══════════════
+
+    /**
+     * Obtiene la cuota de reportes del usuario para la hora actual.
+     * El frontend usa este dato para mostrar "Te quedan X de Y reportes esta hora".
+     */
+    @Transactional(readOnly = true)
+    public ReportQuotaDTO getReportQuota(String userEmail) {
+        User user = userService.findByEmail(userEmail);
+
+        // Administradores no tienen límite: devolvemos valores simbólicos
+        if (user.getRole() == UserRole.ADMIN) {
+            return ReportQuotaDTO.builder()
+                    .limit(-1)
+                    .used(0)
+                    .remaining(-1)
+                    .resetsAt("Sin límite")
+                    .build();
+        }
+
+        int maxReports = calculateMaxReports(user.getTrustLevel());
+        LocalDateTime windowStart = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
+        LocalDateTime windowEnd = windowStart.plusHours(1);
+        long used = reportRepository.countByUserInTimeWindow(user.getId(), windowStart, windowEnd);
+
+        return ReportQuotaDTO.builder()
+                .limit(maxReports)
+                .used((int) used)
+                .remaining(Math.max(0, maxReports - (int) used))
+                .resetsAt(windowEnd.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
+                .build();
+    }
+
     // ═══════════════ HELPERS ═══════════════
     // Nos ayudan a mantener el codigo limpio y organizado
+
+    /**
+     * Valida que el usuario no haya excedido su cuota de reportes por hora.
+     * Lanza RateLimitExceededException (HTTP 429) si se excedió el límite.
+     */
+    private void enforceRateLimit(User user) {
+        int maxReports = calculateMaxReports(user.getTrustLevel());
+        LocalDateTime windowStart = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
+        LocalDateTime windowEnd = windowStart.plusHours(1);
+        long used = reportRepository.countByUserInTimeWindow(user.getId(), windowStart, windowEnd);
+
+        if (used >= maxReports) {
+            String resetsAt = windowEnd.format(DateTimeFormatter.ofPattern("HH:mm"));
+            log.warn("Rate limit alcanzado para usuario {} (TrustLevel: {}, Usado: {}/{})",
+                    user.getEmail(), user.getTrustLevel(), used, maxReports);
+            throw new RateLimitExceededException(maxReports, (int) used, resetsAt);
+        }
+
+        log.debug("Rate limit OK para usuario {} ({}/{})",
+                user.getEmail(), used, maxReports);
+    }
+
+    /**
+     * Calcula el máximo de reportes por hora según el TrustLevel del usuario.
+     * TrustLevel < 65  → 3 reportes/hora
+     * TrustLevel 65-74 → 4 reportes/hora
+     * TrustLevel >= 75 → 5 reportes/hora
+     */
+    private int calculateMaxReports(Double trustLevel) {
+        double level = (trustLevel != null) ? trustLevel : 50.0;
+        if (level >= 75) return 5;
+        if (level >= 65) return 4;
+        return 3;
+    }
 
     // DRY: centraliza búsqueda + excepción. Punto único para agregar cache o
     // auditoría.

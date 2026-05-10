@@ -61,6 +61,28 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 429 - TOO MANY REQUESTS
+     * Se dispara cuando un usuario excede su límite de reportes por hora.
+     * Incluye información del límite y cuándo se reinicia.
+     */
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(RateLimitExceededException ex) {
+
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.TOO_MANY_REQUESTS.value(),
+                "Límite de reportes alcanzado",
+                ex.getMessage(),
+                List.of(
+                        "Límite: " + ex.getLimit(),
+                        "Usados: " + ex.getUsed(),
+                        "Se reinicia a las: " + ex.getResetsAt()
+                )
+        );
+
+        return new ResponseEntity<>(errorResponse, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /**
      * 400 - BAD REQUEST
      * Se dispara con IllegalArgumentException (ej: credenciales inválidas, email duplicado).
      */

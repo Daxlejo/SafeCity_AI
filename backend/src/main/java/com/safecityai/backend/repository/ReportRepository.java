@@ -60,4 +60,16 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     // Reputación histórica del usuario: promedio de trust score de sus reportes verificados
     @Query("SELECT AVG(r.trustScore) FROM Report r WHERE r.reportedBy.id = :userId AND r.status = 'VERIFIED' AND r.trustScore IS NOT NULL")
     Double findAverageTrustScoreByUser(Long userId);
+
+    // Reportes recientes (últimos N días) con coordenadas completas — para heatmap y zona peligrosa semanal
+    @Query("SELECT r FROM Report r WHERE r.reportDate >= :since AND r.latitude IS NOT NULL AND r.longitude IS NOT NULL")
+    List<Report> findRecentWithFullCoordinates(@Param("since") LocalDateTime since);
+
+    // Rate-Limiting: contar reportes de un usuario en la ventana de hora actual
+    @Query("SELECT COUNT(r) FROM Report r WHERE r.reportedBy.id = :userId " +
+           "AND r.reportDate >= :windowStart AND r.reportDate < :windowEnd")
+    long countByUserInTimeWindow(
+            @Param("userId") Long userId,
+            @Param("windowStart") LocalDateTime windowStart,
+            @Param("windowEnd") LocalDateTime windowEnd);
 }

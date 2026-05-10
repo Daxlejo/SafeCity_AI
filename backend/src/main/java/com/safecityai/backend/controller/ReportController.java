@@ -1,6 +1,6 @@
 package com.safecityai.backend.controller;
-
 import com.safecityai.backend.dto.ReportCreateDTO;
+import com.safecityai.backend.dto.ReportQuotaDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.service.ReportService;
 import jakarta.validation.Valid;
@@ -30,6 +30,7 @@ public class ReportController {
     @Operation(summary = "Crear un nuevo reporte", description = "Crea un incidente. El sistema opcionalmente detectará la dirección con geocoding y el reporte quedará pendiente de verificación por la IA.")
     @ApiResponse(responseCode = "201", description = "Reporte creado exitosamente")
     @ApiResponse(responseCode = "400", description = "Datos de entrada inválidos (DTO malformado)")
+    @ApiResponse(responseCode = "429", description = "Límite de reportes por hora alcanzado")
     public ResponseEntity<ReportResponseDTO> createReport(
             @Valid @RequestBody ReportCreateDTO dto,
             Authentication auth) {
@@ -37,6 +38,16 @@ public class ReportController {
         String userEmail = auth != null ? auth.getName() : null;
         ReportResponseDTO response = reportService.createReport(dto, userEmail);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+    // GET /api/v1/reports/quota → 200 OK (cuota de reportes del usuario)
+    @GetMapping("/quota")
+    @Operation(summary = "Consultar cuota de reportes", description = "Retorna cuántos reportes le quedan al usuario autenticado en la hora actual, según su TrustLevel.")
+    @ApiResponse(responseCode = "200", description = "Cuota obtenida exitosamente")
+    public ResponseEntity<ReportQuotaDTO> getReportQuota(Authentication auth) {
+        String userEmail = auth.getName();
+        ReportQuotaDTO quota = reportService.getReportQuota(userEmail);
+        return ResponseEntity.ok(quota);
     }
 
     // GET /api/v1/reports/{id} → 200 OK | 404 Not Found

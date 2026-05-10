@@ -19,4 +19,7 @@ public class HeatmapPointDTO {
     private Double latitude;
     private Double longitude;
     private Double intensity;
+
+    // Tipo de incidente para filtrado/coloreado en el frontend
+    private String incidentType;
 }

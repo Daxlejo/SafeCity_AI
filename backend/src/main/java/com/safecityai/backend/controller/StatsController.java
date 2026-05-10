@@ -1,6 +1,7 @@
 package com.safecityai.backend.controller;
 
 import com.safecityai.backend.dto.DangerousZoneDTO;
+import com.safecityai.backend.dto.DangerousZoneSummaryDTO;
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
@@ -62,5 +63,15 @@ public class StatsController {
             @RequestParam(defaultValue = "7") int days,
             @RequestParam(defaultValue = "10") int limit) {
         return ResponseEntity.ok(statsService.getDangerousZones(days, limit));
+    }
+
+    // GET /api/v1/stats/dangerous-zone-week → zona más peligrosa de la semana
+    @GetMapping("/dangerous-zone-week")
+    public ResponseEntity<DangerousZoneSummaryDTO> getDangerousZoneOfWeek() {
+        DangerousZoneSummaryDTO zone = statsService.getDangerousZoneOfWeek();
+        if (zone == null) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(zone);
     }
 }

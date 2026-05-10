@@ -1,6 +1,7 @@
 package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.DangerousZoneDTO;
+import com.safecityai.backend.dto.DangerousZoneSummaryDTO;
 import com.safecityai.backend.dto.HeatmapPointDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
 import com.safecityai.backend.dto.StatsSummaryDTO;
@@ -13,7 +14,11 @@ import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.repository.ZoneRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.data.domain.PageRequest;
@@ -21,6 +26,18 @@ import org.springframework.data.domain.Sort;
 
 @Service
 public class StatsService {
+
+    // ═══════════════════════════════════════════════════════════════
+    // CONSTANTES DE CONFIGURACIÓN
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // Precisión de redondeo para el grid de celdas geográficas.
+    // 3 decimales ≈ celdas de ~111m en latitud, ~100m en longitud (a latitudes medias).
+    // Esto da celdas efectivas de ~200m x 200m como pide el plan.
+    //
+    private static final double GRID_PRECISION = 1000.0; // 3 decimales
+    private static final double CELL_RADIUS_METERS = 100.0; // Radio estimado por celda
+    private static final int DANGEROUS_ZONE_DAYS = 7;
 
     private final ReportRepository reportRepository;
     private final UserRepository userRepository;
@@ -49,7 +66,7 @@ public class StatsService {
     }
 
     // Conteo por tipo → grafica de barras
-    public java.util.Map<String, Long> getReportsByType() {
+    public Map<String, Long> getReportsByType() {
         return reportRepository.countByIncidentType().stream()
                 .collect(Collectors.toMap(
                         row -> ((IncidentType) row[0]).name(),
@@ -58,7 +75,7 @@ public class StatsService {
     }
 
     // Conteo por zona → devuelve nombres de zona, no IDs
-    public java.util.Map<String, Long> getReportsByZone() {
+    public Map<String, Long> getReportsByZone() {
         return reportRepository.countByZoneId().stream()
                 .collect(Collectors.toMap(
                         row -> {
@@ -71,18 +88,147 @@ public class StatsService {
                 ));
     }
 
-    // Datos para el heatmap del frontend
+    // ═══════════════════════════════════════════════════════════════
+    // HEATMAP: Clústeres por proximidad (grid-cell ~200m)
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // Algoritmo:
+    // 1. Redondear lat/lng a 3 decimales → celdas de ~200m x 200m
+    // 2. Agrupar reportes por celda
+    // 3. Retornar un punto por celda con weight = cantidad de reportes
+    //    e incidentType = tipo más frecuente en esa celda
+    //
     public List<HeatmapPointDTO> getHeatmapData() {
-        return reportRepository.findAllWithCoordinates().stream()
-                .map(report -> HeatmapPointDTO.builder()
-                        .latitude(report.getLatitude())
-                        .longitude(report.getLongitude())
-                        .intensity(calculateIntensity(report))
-                        .build())
-                .collect(Collectors.toList());
+        List<Report> allReports = reportRepository.findAllWithCoordinates();
+        return buildHeatmapFromReports(allReports);
     }
 
-    // Intensidad del punto segun el estado del reporte
+    /**
+     * Construye los puntos del heatmap a partir de una lista de reportes,
+     * agrupando por celda geográfica (~200m) y devolviendo el tipo
+     * de incidente más frecuente por celda.
+     */
+    private List<HeatmapPointDTO> buildHeatmapFromReports(List<Report> reports) {
+        // Agrupar por celda geográfica
+        Map<String, List<Report>> grid = new HashMap<>();
+        for (Report r : reports) {
+            if (r.getLatitude() == null || r.getLongitude() == null) continue;
+            String key = buildGridKey(r.getLatitude(), r.getLongitude());
+            grid.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+        }
+
+        // Construir puntos del heatmap
+        List<HeatmapPointDTO> points = new ArrayList<>();
+        for (Map.Entry<String, List<Report>> entry : grid.entrySet()) {
+            List<Report> cellReports = entry.getValue();
+
+            // Centro de la celda (promedio de coordenadas reales)
+            double avgLat = cellReports.stream().mapToDouble(Report::getLatitude).average().orElse(0);
+            double avgLng = cellReports.stream().mapToDouble(Report::getLongitude).average().orElse(0);
+
+            // Tipo más frecuente en la celda
+            String topType = findMostCommonType(cellReports);
+
+            // Weight = cantidad de reportes (normalizado)
+            double weight = cellReports.size();
+
+            points.add(HeatmapPointDTO.builder()
+                    .latitude(avgLat)
+                    .longitude(avgLng)
+                    .intensity(weight)
+                    .incidentType(topType)
+                    .build());
+        }
+
+        return points;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ZONA MÁS PELIGROSA DE LA SEMANA
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // Usa el mismo grid-cell del heatmap pero solo con reportes
+    // de los últimos 7 días. Retorna la celda con mayor cantidad
+    // de reportes como la "zona más peligrosa".
+    //
+    public DangerousZoneSummaryDTO getDangerousZoneOfWeek() {
+        LocalDateTime since = LocalDateTime.now().minusDays(DANGEROUS_ZONE_DAYS);
+        List<Report> recentReports = reportRepository.findRecentWithFullCoordinates(since);
+
+        if (recentReports.isEmpty()) {
+            return null;
+        }
+
+        // Agrupar por celda geográfica
+        Map<String, List<Report>> grid = new HashMap<>();
+        for (Report r : recentReports) {
+            if (r.getLatitude() == null || r.getLongitude() == null) continue;
+            String key = buildGridKey(r.getLatitude(), r.getLongitude());
+            grid.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+        }
+
+        // Encontrar la celda con mayor cantidad de reportes
+        Map.Entry<String, List<Report>> topEntry = null;
+        for (Map.Entry<String, List<Report>> entry : grid.entrySet()) {
+            if (topEntry == null || entry.getValue().size() > topEntry.getValue().size()) {
+                topEntry = entry;
+            }
+        }
+
+        if (topEntry == null) {
+            return null;
+        }
+
+        List<Report> topCellReports = topEntry.getValue();
+
+        // Centro de la celda
+        double avgLat = topCellReports.stream().mapToDouble(Report::getLatitude).average().orElse(0);
+        double avgLng = topCellReports.stream().mapToDouble(Report::getLongitude).average().orElse(0);
+
+        // Tipo más frecuente
+        String topType = findMostCommonType(topCellReports);
+
+        // Etiqueta descriptiva
+        String label = String.format("Zona %.4f, %.4f — %s", avgLat, avgLng, topType);
+
+        return DangerousZoneSummaryDTO.builder()
+                .latitude(avgLat)
+                .longitude(avgLng)
+                .radiusMeters(CELL_RADIUS_METERS)
+                .reportCount((long) topCellReports.size())
+                .topIncidentType(topType)
+                .label(label)
+                .build();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // UTILIDADES PRIVADAS
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Genera la clave del grid redondeando lat/lng a 3 decimales (~200m).
+     */
+    private String buildGridKey(double lat, double lng) {
+        double roundedLat = Math.round(lat * GRID_PRECISION) / GRID_PRECISION;
+        double roundedLng = Math.round(lng * GRID_PRECISION) / GRID_PRECISION;
+        return String.format("%.3f,%.3f", roundedLat, roundedLng);
+    }
+
+    /**
+     * Encuentra el tipo de incidente más frecuente en una lista de reportes.
+     */
+    private String findMostCommonType(List<Report> reports) {
+        return reports.stream()
+                .collect(Collectors.groupingBy(
+                        r -> r.getIncidentType().name(),
+                        Collectors.counting()))
+                .entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse("OTHER");
+    }
+
+    // Intensidad del punto segun el estado del reporte (legacy, mantenido para compatibilidad)
     private Double calculateIntensity(Report report) {
         return switch (report.getStatus()) {
             case VERIFIED -> 1.0;    // Verificado = maxima intensidad
@@ -113,6 +259,7 @@ public class StatsService {
                         .build())
                 .collect(Collectors.toList());
     }
+
     // ═══════════════════════════════════════════════════════════════
     // RANKING DE ZONAS PELIGROSAS SEMANAL
     // ═══════════════════════════════════════════════════════════════
@@ -129,33 +276,26 @@ public class StatsService {
     // distancias entre todos los pares de reportes O(n²)
     //
     public List<DangerousZoneDTO> getDangerousZones(int days, int limit) {
-        java.time.LocalDateTime since = java.time.LocalDateTime.now().minusDays(days);
+        LocalDateTime since = LocalDateTime.now().minusDays(days);
         List<Report> recentReports = reportRepository.findRecentWithCoordinates(since);
 
         // Agrupar por "celda" geográfica (lat/lng redondeado a 2 decimales)
-        java.util.Map<String, List<Report>> grid = new java.util.HashMap<>();
+        Map<String, List<Report>> grid = new HashMap<>();
         for (Report r : recentReports) {
             if (r.getLatitude() == null || r.getLongitude() == null) continue;
             // Redondear a 2 decimales ≈ celdas de ~1km
             String key = String.format("%.2f,%.2f", r.getLatitude(), r.getLongitude());
-            grid.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(r);
+            grid.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
         }
 
         // Construir ranking
-        List<DangerousZoneDTO> ranking = new java.util.ArrayList<>();
+        List<DangerousZoneDTO> ranking = new ArrayList<>();
         for (var entry : grid.entrySet()) {
             List<Report> cellReports = entry.getValue();
             long count = cellReports.size();
 
             // Encontrar el tipo más común en esta celda
-            String mostCommon = cellReports.stream()
-                    .collect(Collectors.groupingBy(
-                            r -> r.getIncidentType().name(),
-                            Collectors.counting()))
-                    .entrySet().stream()
-                    .max(java.util.Map.Entry.comparingByValue())
-                    .map(java.util.Map.Entry::getKey)
-                    .orElse("OTHER");
+            String mostCommon = findMostCommonType(cellReports);
 
             // Nivel de riesgo según cantidad de incidentes
             String risk;
@@ -189,4 +329,5 @@ public class StatsService {
         return topN;
     }
 }
+
 

@@ -42,6 +42,7 @@ public class OsintService {
     private final GeocodingService geocodingService;
     private final AIClient aiClient;
     private final NotificationService notificationService;
+    private final OsintConfigService osintConfigService;
 
     @Value("${app.rapidapi.key}")
     private String rapidApiKey;
@@ -74,7 +75,8 @@ public class OsintService {
                         OsintNewsArticleRepository newsArticleRepository,
                         GeocodingService geocodingService,
                         AIClient aiClient,
-                        NotificationService notificationService) {
+                        NotificationService notificationService,
+                        OsintConfigService osintConfigService) {
         this.restTemplate = new RestTemplate();
         this.objectMapper = new ObjectMapper();
         this.reportRepository = reportRepository;
@@ -82,21 +84,31 @@ public class OsintService {
         this.geocodingService = geocodingService;
         this.aiClient = aiClient;
         this.notificationService = notificationService;
+        this.osintConfigService = osintConfigService;
     }
 
     // ═══════════════════════════════════════════════════════════
-    // SCHEDULER: Automatic scan every hour
+    // SCHEDULER: Automatic scan — lee config dinámica de la BD
     // ═══════════════════════════════════════════════════════════
 
     @Scheduled(fixedRate = 3600000, initialDelay = 60000)
     public void scheduledScan() {
-        if (!schedulerEnabled) {
-            log.debug("[OSINT] Scheduler disabled, skipping scan");
+        // Prioridad: la config de BD sobreescribe la property estática
+        var dbConfig = osintConfigService.getActiveConfig();
+        boolean isEnabled = dbConfig.isEnabled() && schedulerEnabled;
+
+        if (!isEnabled) {
+            log.debug("[OSINT] Scheduler disabled (DB: {}, property: {}), skipping scan",
+                    dbConfig.isEnabled(), schedulerEnabled);
             return;
         }
-        log.info("[OSINT] Executing scheduled scan for '{}'", defaultCity);
+
+        // Usar ciudad de la config de BD si está disponible
+        String city = dbConfig.getDefaultCity() != null ? dbConfig.getDefaultCity() : defaultCity;
+        log.info("[OSINT] Executing scheduled scan for '{}' (interval: {}min)",
+                city, dbConfig.getIntervalMinutes());
         try {
-            Map<String, Object> result = scanAndClassify(defaultCity);
+            Map<String, Object> result = scanAndClassify(city);
             log.info("[OSINT] Scheduled scan completed: {}", result);
         } catch (Exception e) {
             log.error("[OSINT] Error in scheduled scan: {}", e.getMessage());

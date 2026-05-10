@@ -1,8 +1,10 @@
 package com.safecityai.backend.controller;
 
+import com.safecityai.backend.dto.OsintConfigDTO;
 import com.safecityai.backend.dto.OsintResultDTO;
 import com.safecityai.backend.model.OsintNewsArticle;
 import com.safecityai.backend.repository.OsintNewsArticleRepository;
+import com.safecityai.backend.service.OsintConfigService;
 import com.safecityai.backend.service.OsintService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -22,12 +24,19 @@ public class OsintController {
 
     private final OsintService osintService;
     private final OsintNewsArticleRepository newsArticleRepository;
+    private final OsintConfigService osintConfigService;
 
     public OsintController(OsintService osintService,
-                           OsintNewsArticleRepository newsArticleRepository) {
+                           OsintNewsArticleRepository newsArticleRepository,
+                           OsintConfigService osintConfigService) {
         this.osintService = osintService;
         this.newsArticleRepository = newsArticleRepository;
+        this.osintConfigService = osintConfigService;
     }
+
+    // ═══════════════════════════════════════════
+    // BÚSQUEDA Y ESCANEO
+    // ═══════════════════════════════════════════
 
     @GetMapping("/search")
     @Operation(summary = "Buscar incidentes (Preview)",
@@ -47,6 +56,25 @@ public class OsintController {
         return ResponseEntity.ok(osintService.scanAndClassify(city));
     }
 
+    // ═══════════════════════════════════════════
+    // TRIGGER MANUAL (Admin)
+    // ═══════════════════════════════════════════
+
+    @PostMapping("/trigger")
+    @Operation(summary = "Forzar escaneo OSINT manualmente",
+            description = "Dispara un escaneo OSINT inmediato sin esperar al scheduler. Solo disponible para administradores.")
+    @ApiResponse(responseCode = "200", description = "Escaneo disparado correctamente")
+    public ResponseEntity<Map<String, Object>> triggerScan() {
+        OsintConfigDTO config = osintConfigService.getConfigDTO();
+        String city = config.getDefaultCity() != null ? config.getDefaultCity() : "Pasto";
+        Map<String, Object> result = osintService.scanAndClassify(city);
+        return ResponseEntity.ok(result);
+    }
+
+    // ═══════════════════════════════════════════
+    // NOTICIAS OSINT
+    // ═══════════════════════════════════════════
+
     @GetMapping("/news")
     @Operation(summary = "Noticias Pasto",
             description = "Lista de noticias de seguridad relevantes que no pudieron ser geolocalizadas. Estas noticias no aparecen en el mapa.")
@@ -56,5 +84,33 @@ public class OsintController {
             @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(
                 newsArticleRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size)));
+    }
+
+    // ═══════════════════════════════════════════
+    // CONFIGURACIÓN OSINT (Admin CRUD)
+    // ═══════════════════════════════════════════
+
+    @GetMapping("/config")
+    @Operation(summary = "Obtener configuración OSINT",
+            description = "Retorna la configuración actual del módulo OSINT: estado, intervalo, keywords, URLs prioritarias.")
+    @ApiResponse(responseCode = "200", description = "Configuración obtenida correctamente")
+    public ResponseEntity<OsintConfigDTO> getConfig() {
+        return ResponseEntity.ok(osintConfigService.getConfigDTO());
+    }
+
+    @PutMapping("/config")
+    @Operation(summary = "Actualizar configuración OSINT",
+            description = "Actualiza la configuración global del módulo OSINT. Solo disponible para administradores.")
+    @ApiResponse(responseCode = "200", description = "Configuración actualizada correctamente")
+    public ResponseEntity<OsintConfigDTO> updateConfig(@RequestBody OsintConfigDTO configDTO) {
+        return ResponseEntity.ok(osintConfigService.updateConfig(configDTO));
+    }
+
+    @PutMapping("/config/toggle")
+    @Operation(summary = "Activar/Desactivar scheduler OSINT",
+            description = "Cambia rápidamente el estado del scheduler OSINT sin modificar otras configuraciones.")
+    @ApiResponse(responseCode = "200", description = "Estado del scheduler actualizado")
+    public ResponseEntity<OsintConfigDTO> toggleOsint(@RequestParam boolean enabled) {
+        return ResponseEntity.ok(osintConfigService.toggleEnabled(enabled));
     }
 }

@@ -16,8 +16,8 @@ public class JwtService {
     @Value("${app.jwt.secret:SafeCityAI_SuperSecretKey_2026_MinLength32Chars}")
     private String secret;
 
-    @Value("${app.jwt.expiration:86400000}")
-    private long expiration; // 24 horas por defecto
+    @Value("${app.jwt.expiration:1200000}")
+    private long expiration; // 20 minutos por defecto (1200000ms = 20 * 60 * 1000)
 
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
