@@ -56,11 +56,15 @@ public class EmailService {
         }
 
         String resetLink = frontendUrl + "/reset-password?token=" + token;
+        // trim() previene errores silenciosos por espacios en blanco al copiar el API key en Render
+        String cleanApiKey = brevoApiKey.trim();
+
+        log.debug("[Email] Intentando enviar a {} — sender: {} — key length: {}", to, senderEmail, cleanApiKey.length());
 
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("api-key", brevoApiKey);
+            headers.set("api-key", cleanApiKey);
 
             Map<String, Object> body = Map.of(
                     "sender", Map.of("name", senderName, "email", senderEmail),
