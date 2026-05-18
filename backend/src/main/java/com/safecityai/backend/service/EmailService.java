@@ -10,24 +10,29 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Servicio de correo electrónico usando Resend API (HTTP/REST).
- * Se usa Resend en lugar de JavaMailSender/SMTP porque Render Free Tier
- * bloquea todos los puertos SMTP salientes (25, 465, 587) desde Sep 2025.
- * Resend envía correos vía HTTPS, sin restricciones de firewall.
+ * Servicio de correo electrónico usando Brevo (Sendinblue) API HTTP.
+ * Se usa Brevo en lugar de SMTP/Resend porque:
+ *  - Render Free Tier bloquea puertos SMTP (25, 465, 587).
+ *  - Resend exige dominio propio verificado para enviar a terceros.
+ *  - Brevo permite enviar a cualquier destinatario con solo un sender email verificado.
+ * Plan gratuito: 300 emails/día, sin límite mensual de contactos.
  *
- * Docs: https://resend.com/docs/api-reference/emails/send-email
+ * Docs: https://developers.brevo.com/reference/sendtransacemail
  */
 @Slf4j
 @Service
 public class EmailService {
 
-    private static final String RESEND_API_URL = "https://api.resend.com/emails";
+    private static final String BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 
-    @Value("${app.resend.api-key:}")
-    private String resendApiKey;
+    @Value("${app.brevo.api-key:}")
+    private String brevoApiKey;
 
-    @Value("${app.resend.from:SafeCity AI <onboarding@resend.dev>}")
-    private String fromAddress;
+    @Value("${app.brevo.sender-email:noreply@safecity.ai}")
+    private String senderEmail;
+
+    @Value("${app.brevo.sender-name:SafeCity AI}")
+    private String senderName;
 
     @Value("${app.frontend.url:https://safe-cityai.vercel.app}")
     private String frontendUrl;
@@ -44,35 +49,33 @@ public class EmailService {
      * para no bloquear el flujo (el token ya fue guardado en BD).
      */
     public void sendPasswordResetEmail(String to, String token) {
-        if (resendApiKey == null || resendApiKey.isBlank()) {
-            log.warn("[Email] RESEND_API_KEY no configurada — correo de recuperación NO enviado a {}. "
-                    + "Configura la variable RESEND_API_KEY en las variables de entorno.", to);
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            log.warn("[Email] BREVO_API_KEY no configurada — correo NO enviado a {}. "
+                    + "Configura la variable BREVO_API_KEY en las variables de entorno.", to);
             return;
         }
 
         String resetLink = frontendUrl + "/reset-password?token=" + token;
 
-        String htmlBody = buildPasswordResetHtml(resetLink);
-
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(resendApiKey);
+            headers.set("api-key", brevoApiKey);
 
             Map<String, Object> body = Map.of(
-                    "from", fromAddress,
-                    "to", List.of(to),
+                    "sender", Map.of("name", senderName, "email", senderEmail),
+                    "to", List.of(Map.of("email", to)),
                     "subject", "SafeCity AI - Recuperación de contraseña",
-                    "html", htmlBody
+                    "htmlContent", buildPasswordResetHtml(resetLink)
             );
 
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-            ResponseEntity<String> response = restTemplate.postForEntity(RESEND_API_URL, request, String.class);
+            ResponseEntity<String> response = restTemplate.postForEntity(BREVO_API_URL, request, String.class);
 
             if (response.getStatusCode().is2xxSuccessful()) {
                 log.info("[Email] Correo de recuperación enviado exitosamente a {}", to);
             } else {
-                log.error("[Email] Resend retornó status {} para {}: {}", response.getStatusCode(), to, response.getBody());
+                log.error("[Email] Brevo retornó status {} para {}: {}", response.getStatusCode(), to, response.getBody());
             }
 
         } catch (Exception e) {
