@@ -1,6 +1,7 @@
 package com.safecityai.backend.model;
 
 import com.safecityai.backend.model.enums.IncidentType;
+import com.safecityai.backend.model.enums.OsintArticleStatus;
 import com.safecityai.backend.model.enums.ReportSource;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -57,4 +58,14 @@ public class OsintNewsArticle {
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
+
+    /**
+     * Estado de visibilidad en el feed público.
+     * PUBLISHED = visible al público, HIDDEN = solo admin lo ve.
+     * Default: PUBLISHED para no romper artículos existentes.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    @Builder.Default
+    private OsintArticleStatus status = OsintArticleStatus.PUBLISHED;
 }

@@ -65,6 +65,17 @@ public class OsintService {
     @Value("${app.osint.dedup-hours:12}")
     private int dedupHours;
 
+    // Palabras clave que descalifican un artículo SIN llamar a la IA (ahorra tokens)
+    private static final List<String> REJECTION_KEYWORDS = List.of(
+            "fútbol", "soccer", "deporte", "partido", "gol", "liga", "torneo",
+            "política", "elecciones", "candidato", "alcalde", "gobernador", "senado",
+            "cultura", "festival", "concierto", "evento", "celebración", "feria",
+            "empleo", "trabajo", "oferta laboral", "vacante", "convocatoria",
+            "clima", "lluvia", "temperatura", "pronóstico",
+            "covid", "vacuna", "salud pública", "epidemia",
+            "economía", "impuesto", "inflación", "dólar"
+    );
+
     // Facebook pages — local Pasto sources
     private static final List<String> PRIORITY_FB_PAGES = List.of(
             "Pasto Denuncias",
@@ -123,10 +134,12 @@ public class OsintService {
         List<OsintResultDTO> rawResults = searchIncidents(city);
         log.info("[OSINT] scan: {} raw results found for '{}'", rawResults.size(), city);
 
-        // Rate limiting: process max N items per execution
+        // Rate limiting: procesar máximo N items por ejecución.
+        // Solo incluir artículos de los últimos 3 días por publishedAt (si tiene fecha)
+        // Si publishedAt es null, se incluye igualmente (la IA y el hash evitarán ruido).
         List<OsintResultDTO> toProcess = rawResults.stream()
                 .filter(r -> r.getPublishedAt() == null
-                        || !r.getPublishedAt().isBefore(LocalDateTime.now().minusDays(7)))
+                        || !r.getPublishedAt().isBefore(LocalDateTime.now().minusDays(3)))
                 .limit(maxItemsPerExecution)
                 .toList();
 
@@ -134,16 +147,33 @@ public class OsintService {
         int savedAsNews = 0;
         int duplicatesSkipped = 0;
         int discardedByAI = 0;
+        int discardedByKeyword = 0;
         List<Long> reportIds = new ArrayList<>();
 
         for (OsintResultDTO raw : toProcess) {
             try {
+                // Pre-filtro: descartar contenido irrelevante SIN gastar tokens de IA
+                if (isIrrelevantContent(raw.getContent())) {
+                    discardedByKeyword++;
+                    log.debug("[OSINT] Pre-filtrado por keyword: '{}'", truncate(raw.getContent(), 60));
+                    continue;
+                }
                 // Step 1: AI entity extraction + classification (single call)
-                OsintAIResultDTO aiResult = extractEntitiesWithAI(raw.getContent());
+                // Truncar a 400 chars para minimizar tokens enviados a la IA
+                String contentForAI = truncate(raw.getContent(), 400);
+                OsintAIResultDTO aiResult = extractEntitiesWithAI(contentForAI);
                 if (aiResult == null || !aiResult.isSecurityIncident()) {
                     discardedByAI++;
-                    log.debug("[OSINT] Discarded by AI (not security): '{}'",
+                    log.debug("[OSINT] Descartado por IA (no es seguridad): '{}'",
                             truncate(raw.getContent(), 60));
+                    continue;
+                }
+
+                // Verificar si el incidente estimado tiene más de 3 días
+                LocalDateTime estimatedDate = parseEstimatedDate(aiResult.getEstimatedDate());
+                if (estimatedDate != null && estimatedDate.isBefore(LocalDateTime.now().minusDays(3))) {
+                    log.debug("[OSINT] Incidente descartado por fecha estimada > 3d: '{}'", aiResult.getEstimatedDate());
+                    discardedByAI++;
                     continue;
                 }
 
@@ -182,8 +212,8 @@ public class OsintService {
             }
         }
 
-        log.info("[OSINT] Pipeline V2: {} created, {} news, {} duplicates, {} discarded from {} processed",
-                created, savedAsNews, duplicatesSkipped, discardedByAI, toProcess.size());
+        log.info("[OSINT] Pipeline V2: {} reportes, {} noticias, {} duplicados, {} descartados IA, {} descartados keyword de {} procesados",
+                created, savedAsNews, duplicatesSkipped, discardedByAI, discardedByKeyword, toProcess.size());
 
         return Map.of(
                 "city", city,
@@ -193,6 +223,7 @@ public class OsintService {
                 "savedAsNews", savedAsNews,
                 "duplicatesSkipped", duplicatesSkipped,
                 "discardedByAI", discardedByAI,
+                "discardedByKeyword", discardedByKeyword,
                 "reportIds", reportIds);
     }
 
@@ -346,10 +377,10 @@ public class OsintService {
                 .address(aiResult.getExactAddress())
                 .latitude(coords[0])
                 .longitude(coords[1])
-                .source(raw.getSourceType() != null ? raw.getSourceType() : ReportSource.SOCIAL_MEDIA)
+                .source(ReportSource.OSINT_AUTO)  // Marcado como creado automáticamente por OSINT+IA
                 .status(status)
                 .trustScore(aiResult.getTrustScore())
-                .aiAnalysis("[OSINT V2] " + aiResult.getCleanSummary())
+                .aiAnalysis("[OSINT Auto] " + aiResult.getCleanSummary())
                 .reportDate(LocalDateTime.now())
                 .incidentDate(parseEstimatedDate(aiResult.getEstimatedDate()))
                 .build();
@@ -482,18 +513,24 @@ public class OsintService {
     private List<OsintResultDTO> searchGoogleNews(String city) {
         List<OsintResultDTO> results = new ArrayList<>();
 
-        // Session 1: general incidents
-        String query1 = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio+OR+choque)+"
+        // Sesión 1: incidentes generales
+        String query1 = "(accidente+OR+robo+OR+atraco+OR+hurto+OR+homicidio+OR+choque+OR+herido+OR+atropello)+"
                 + city.replace(" ", "+");
-        results.addAll(fetchGoogleNewsRSS(query1, city, 8));
+        results.addAll(fetchGoogleNewsRSS(query1, city, 10));
 
-        // Session 2: geolocated incidents with Pasto landmarks
-        String query2 = "(accidente+OR+robo+OR+choque+OR+herido+OR+atropello)"
-                + "+(panamericana+OR+lorenzo+OR+anganoy+OR+avenida+OR+sector+OR+barrio)+"
+        // Sesión 2: incidentes con lugares específicos de Pasto
+        String query2 = "(accidente+OR+robo+OR+choque+OR+herido+OR+atropello+OR+atraco)"
+                + "+(panamericana+OR+lorenzo+OR+anganoy+OR+avenida+OR+sector+OR+barrio+OR+carrera+OR+calle)+"
                 + city.replace(" ", "+");
-        results.addAll(fetchGoogleNewsRSS(query2, city, 8));
+        results.addAll(fetchGoogleNewsRSS(query2, city, 10));
 
-        log.info("Google News total (both sessions): {} results for '{}'", results.size(), city);
+        // Sesión 3: barrios y zonas específicas de Pasto
+        String query3 = "(robo+OR+atraco+OR+accidente+OR+hurto+OR+choque)"
+                + "+(Chapalito+OR+Jongovito+OR+Torobajo+OR+Lorenzo+OR+Igualada+OR+Bombona+OR+Fatima+OR+Ejido+OR+Obrero+OR+Alfonso+OR+Centenario)+"
+                + city.replace(" ", "+");
+        results.addAll(fetchGoogleNewsRSS(query3, city, 10));
+
+        log.info("Google News total (3 sesiones): {} resultados para '{}'", results.size(), city);
         return results;
     }
 
@@ -655,14 +692,32 @@ public class OsintService {
     }
 
     /**
-     * SHA-256 hash for news article content deduplication.
+     * Pre-filtro rápido por keywords obvias de contenido irrelevante.
+     * Evita gastar tokens de IA en noticias que claramente no son incidentes de seguridad.
+     */
+    private boolean isIrrelevantContent(String content) {
+        if (content == null || content.isBlank()) return true;
+        String lower = content.toLowerCase();
+        return REJECTION_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
+    /**
+     * SHA-256 hash para deduplicación semántica de noticias.
+     * Normaliza el contenido (minúsculas, sin puntuación, 100 primeros chars)
+     * para detectar el mismo incidente con summaries ligeramente distintos.
      */
     private String hashContent(String content) {
         if (content == null || content.isBlank()) return "";
         try {
-            String normalized = content.toLowerCase().trim().replaceAll("\\s+", " ");
+            // Normalización semántica: minúsculas + sin puntuación + primeros 120 chars
+            String normalized = content.toLowerCase()
+                    .replaceAll("[^a-z0–9à-ü ]", " ")
+                    .replaceAll("\\s+", " ")
+                    .trim();
+            // Usar primeros 120 chars para capturar el "núcleo" del incidente
+            String keyPart = normalized.length() > 120 ? normalized.substring(0, 120) : normalized;
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(normalized.getBytes(StandardCharsets.UTF_8));
+            byte[] digest = md.digest(keyPart.getBytes(StandardCharsets.UTF_8));
             return String.format("%064x", new BigInteger(1, digest));
         } catch (Exception e) {
             return String.valueOf(content.hashCode());
