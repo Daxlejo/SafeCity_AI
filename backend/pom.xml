@@ -126,11 +126,9 @@
 			<artifactId>jackson-datatype-jsr310</artifactId>
 		</dependency>
 
-		<!-- Spring Boot Mail -->
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-mail</artifactId>
-		</dependency>
+		<!-- Correo vía Resend API HTTP: NO se necesita spring-boot-starter-mail.
+		     Render Free Tier bloquea puertos SMTP (25/465/587) desde sep 2025.
+		     EmailService usa RestTemplate (ya incluido en spring-boot-starter-web). -->
 	</dependencies>
 
 	<build>
