@@ -27,7 +27,7 @@ public class OsintNewsArticle {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, length = 300)
+    @Column(nullable = false, length = 500)
     private String title;
 
     @Column(nullable = false, length = 1000)
@@ -37,7 +37,8 @@ public class OsintNewsArticle {
     @Column(name = "incident_type", nullable = false)
     private IncidentType incidentType;
 
-    @Column(name = "source_url", length = 500)
+    // TEXT en lugar de VARCHAR(500) para soportar URLs largas (Google News, etc.)
+    @Column(name = "source_url", columnDefinition = "TEXT")
     private String sourceUrl;
 
     @Enumerated(EnumType.STRING)
