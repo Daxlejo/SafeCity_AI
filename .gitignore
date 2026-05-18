@@ -42,5 +42,4 @@ build/
 graphify-out/
 .agents/
 
-### Frontend — repo separado (SafeCity_AI_FRONTEND) ###
-frontend_src/
+
