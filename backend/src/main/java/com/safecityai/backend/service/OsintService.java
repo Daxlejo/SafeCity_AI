@@ -246,25 +246,25 @@ public class OsintService {
 
     private String buildOsintExtractionPrompt(String rawText) {
         return """
-                You are an OSINT analyst for SafeCityAI in Pasto, Colombia.
-                Analyze the following scraped news/social media text and extract structured security information.
-                
-                === TEXT TO ANALYZE ===
+                Eres un analista OSINT para SafeCityAI en Pasto, Colombia.
+                Analiza el siguiente texto y extrae información de seguridad estructurada.
+
+                === TEXTO A ANALIZAR ===
                 "%s"
-                
-                === INSTRUCTIONS ===
-                1. Determine if this text describes a REAL security incident (robbery, accident, assault, fire, etc.)
-                2. REJECT: political news, cultural events, sports, employment, opinions, rumors, jokes
-                3. Extract the EXACT physical address or location mentioned (street, neighborhood, landmark)
-                4. Write a clean 1-2 sentence summary of the incident
-                5. Estimate when it happened (ISO 8601 format)
-                6. Assign a trustScore (0-100) based on specificity and credibility
-                
-                === CATEGORIES ===
+
+                === INSTRUCCIONES ===
+                1. Determina si el texto describe un incidente de seguridad REAL (robo, accidente, agresión, incendio, etc.)
+                2. RECHAZA: noticias políticas, eventos culturales, deportes, empleo, opiniones, rumores, chistes
+                3. Extrae la dirección física EXACTA mencionada (calle, barrio, lugar de referencia)
+                4. Escribe UN resumen conciso EN ESPAÑOL del incidente (máx. 2 oraciones)
+                5. Estima cuándo ocurrió (formato ISO 8601)
+                6. Asigna trustScore (0-100) según especificidad y credibilidad de la fuente
+
+                === CATEGORÍAS ===
                 ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER
-                
-                Respond ONLY with this JSON, no additional text:
-                {"isSecurityIncident":<true/false>,"incidentType":"<TYPE>","exactAddress":"<address or empty string>","cleanSummary":"<summary>","estimatedDate":"<ISO 8601 or empty>","trustScore":<0-100>,"shouldVerify":<true if score>=60>}
+
+                Responde SOLO con este JSON, sin texto adicional:
+                {"isSecurityIncident":<true/false>,"incidentType":"<TIPO>","exactAddress":"<dirección o vacío>","cleanSummary":"<resumen en español>","estimatedDate":"<ISO 8601 o vacío>","trustScore":<0-100>,"shouldVerify":<true si score>=60>}
                 """.formatted(rawText);
     }
 
