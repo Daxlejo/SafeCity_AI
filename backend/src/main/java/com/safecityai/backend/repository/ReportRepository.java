@@ -72,4 +72,8 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
             @Param("userId") Long userId,
             @Param("windowStart") LocalDateTime windowStart,
             @Param("windowEnd") LocalDateTime windowEnd);
+
+    // Agente 1: Estadísticas de reportes del usuario
+    long countByReportedById(Long userId);
+    long countByReportedByIdAndStatus(Long userId, ReportStatus status);
 }

@@ -22,4 +22,9 @@ public class UserResponseDTO {
     private Double trustLevel;
     private Boolean active;
     private LocalDateTime createdAt;
+    
+    // Agente 1: Estadísticas del usuario
+    private Long reportCount;
+    private Long approvedReports;
+    private Long rejectedReports;
 }

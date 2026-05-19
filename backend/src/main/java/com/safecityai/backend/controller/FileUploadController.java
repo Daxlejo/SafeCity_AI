@@ -1,6 +1,7 @@
 package com.safecityai.backend.controller;
 
 import com.safecityai.backend.service.FileUploadService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
@@ -18,23 +19,35 @@ public class FileUploadController {
 
     private final FileUploadService fileUploadService;
 
+    /**
+     * URL base del backend (ej. "https://safecity-ai-backend.onrender.com").
+     * Se configura en application.properties como: app.base-url=${APP_BASE_URL:http://localhost:8080}
+     * Permite construir la URL completa de la foto sin depender del frontend.
+     */
+    @Value("${app.base-url:http://localhost:8080}")
+    private String baseUrl;
+
     public FileUploadController(FileUploadService fileUploadService) {
         this.fileUploadService = fileUploadService;
     }
 
     /**
-     * POST /api/v1/uploads → sube una foto
-     * 
-     * Devuelve solo el fileName. El frontend construye la URL completa
-     * dinámicamente con VITE_BACKEND_URL para evitar URLs rotas tras redeploys.
+     * POST /api/v1/uploads → sube una foto y devuelve la URL completa.
+     *
+     * El backend construye la URL absoluta usando app.base-url para evitar
+     * que el frontend dependa de VITE_BACKEND_URL al renderizar la foto.
+     *
+     * Respuesta: { "fileName": "uuid.jpg", "photoUrl": "https://backend.../api/v1/uploads/uuid.jpg" }
      */
     @PostMapping
     public ResponseEntity<Map<String, String>> upload(@RequestParam("file") MultipartFile file) {
         String fileName = fileUploadService.uploadFile(file);
+        // La URL completa permite que el frontend use photoUrl directamente en <img src=...>
+        String fullPhotoUrl = baseUrl + "/api/v1/uploads/" + fileName;
 
         return ResponseEntity.ok(Map.of(
                 "fileName", fileName,
-                "photoUrl", fileName
+                "photoUrl", fullPhotoUrl
         ));
     }
 

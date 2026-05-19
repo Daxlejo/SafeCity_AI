@@ -2,6 +2,7 @@ package com.safecityai.backend.service;
 
 import com.safecityai.backend.dto.IAClassificationDTO;
 import com.safecityai.backend.dto.ReportResponseDTO;
+import com.safecityai.backend.dto.UserStatsDTO;
 import com.safecityai.backend.model.Report;
 import com.safecityai.backend.model.User;
 import com.safecityai.backend.model.enums.IncidentType;
@@ -157,13 +158,19 @@ public class IAClassificationService {
         // Broadcast WebSocket DESPUÉS del commit para evitar notificaciones fantasma
         ReportResponseDTO dto = convertToDTO(report);
         broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
+        
+        // Agente 1: Broadcast stats del usuario
+        broadcastUserStats(owner);
     }
 
     private void handleRejected(Report report, User owner, IAClassificationDTO result) {
+        report.setStatus(ReportStatus.REJECTED);
+        reportRepository.save(report);
+
         if (owner != null) {
             adjustTrustLevel(owner, -PENALTY_REJECTED);
             String reason = result.getReasoning() != null ? result.getReasoning() : "contenido no válido";
-            notificationUserService.createNotification(owner, null,
+            notificationUserService.createNotification(owner, report,
                     "⚠️ Reporte rechazado",
                     "Tu reporte #" + report.getId() + " fue rechazado: " + reason
                             + ". Perdiste " + (int) PENALTY_REJECTED + " puntos de reputación.",
@@ -173,11 +180,13 @@ public class IAClassificationService {
         }
 
         log.info("[IA-Async] Report #{} REJECTED (score: {})", report.getId(), result.getTrustScore());
-        Long deletedId = report.getId();
-        reportRepository.delete(report);
 
         // Broadcast WebSocket DESPUÉS del commit
-        broadcastAfterCommit(() -> notificationService.notifyReportDeleted(deletedId));
+        ReportResponseDTO dto = convertToDTO(report);
+        broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
+        
+        // Agente 1: Broadcast stats del usuario
+        broadcastUserStats(owner);
     }
 
     private void handlePending(Report report, User owner, IAClassificationDTO result,
@@ -199,6 +208,9 @@ public class IAClassificationService {
         // Broadcast WebSocket DESPUÉS del commit
         ReportResponseDTO dto = convertToDTO(report);
         broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
+        
+        // Agente 1: Broadcast stats del usuario
+        broadcastUserStats(owner);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -231,8 +243,8 @@ public class IAClassificationService {
         }
 
         String trustPolicy = isVerified
-                ? "Reporter is VERIFIED (trust>=70): apply presumption of truthfulness, be more flexible.\n"
-                : "Reporter is UNVERIFIED: apply normal strict scoring.\n";
+                ? "Este usuario tiene alta credibilidad, asume presunción de veracidad a menos que la imagen sea falsa o sin relación.\\n"
+                : "Reporter is UNVERIFIED: apply normal strict scoring.\\n";
 
         return """
                 Security report evaluator for SafeCityAI, Pasto Colombia.
@@ -251,7 +263,11 @@ public class IAClassificationService {
 
                 IMAGE: If provided, analyze jointly. Corroborating image = significant score boost.
 
-                STATUS: score>=60 → VERIFIED | score==0 → REJECTED | else → PENDING
+                STATUS DECISION RULES (CRITICAL):
+                Debes clasificar este reporte como VERIFIED o REJECTED basándote en la evidencia y el Trust Level del usuario.
+                SOLO responde PENDING si es absolutamente imposible deducir si el reporte es real o falso, o si falta evidencia visual crítica que no puede ser suplida por la confianza.
+                STATUS: score>=60 → VERIFIED | score<=30 → REJECTED | else → PENDING (only if strictly necessary)
+
                 CATEGORIES: ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER
 
                 OUTPUT (JSON only, no extra text):
@@ -373,6 +389,21 @@ public class IAClassificationService {
                 .build();
     }
 
+    // Agente 1: Helper para notificar estadísticas del usuario
+    private void broadcastUserStats(User owner) {
+        if (owner == null) return;
+        
+        UserStatsDTO stats = UserStatsDTO.builder()
+                .userId(owner.getId())
+                .trustLevel(owner.getTrustLevel())
+                .reportCount(reportRepository.countByReportedById(owner.getId()))
+                .approvedReports(reportRepository.countByReportedByIdAndStatus(owner.getId(), ReportStatus.VERIFIED))
+                .rejectedReports(reportRepository.countByReportedByIdAndStatus(owner.getId(), ReportStatus.REJECTED))
+                .build();
+                
+        broadcastAfterCommit(() -> notificationService.notifyUserStatsUpdated(stats));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // HEURISTIC FALLBACK (when AI is unavailable)
     // ═══════════════════════════════════════════════════════════════
@@ -383,7 +414,7 @@ public class IAClassificationService {
         IncidentType suggestedType = detectIncidentType(report.getDescription());
 
         ReportStatus statusDecision;
-        if (score == 0.0) statusDecision = ReportStatus.REJECTED;
+        if (score <= 30.0) statusDecision = ReportStatus.REJECTED;
         else if (score >= 60.0) statusDecision = ReportStatus.VERIFIED;
         else statusDecision = ReportStatus.PENDING;
 

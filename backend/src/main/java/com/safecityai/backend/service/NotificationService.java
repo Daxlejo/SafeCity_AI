@@ -55,4 +55,15 @@ public class NotificationService {
     private String buildTypeTopic(String incidentType) {
         return TOPIC_BASE + "/" + incidentType;
     }
+
+    // Agente 1: Notificar actualización de estadísticas del usuario
+    private static final String TOPIC_USER_STATS = "/topic/user/%s/stats";
+
+    public void notifyUserStatsUpdated(com.safecityai.backend.dto.UserStatsDTO stats) {
+        if (stats != null && stats.getUserId() != null) {
+            String topic = String.format(TOPIC_USER_STATS, stats.getUserId());
+            log.info("Notificando actualización de stats para usuario {}: {}", stats.getUserId(), topic);
+            messagingTemplate.convertAndSend(topic, stats);
+        }
+    }
 }

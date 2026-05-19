@@ -25,6 +25,7 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -70,10 +71,15 @@ public class OsintService {
             "fútbol", "soccer", "deporte", "partido", "gol", "liga", "torneo",
             "política", "elecciones", "candidato", "alcalde", "gobernador", "senado",
             "cultura", "festival", "concierto", "evento", "celebración", "feria",
-            "empleo", "trabajo", "oferta laboral", "vacante", "convocatoria",
-            "clima", "lluvia", "temperatura", "pronóstico",
+            "empleo", "oferta laboral", "vacante",
+            "clima", "lluvia", "pronóstico",
             "covid", "vacuna", "salud pública", "epidemia",
             "economía", "impuesto", "inflación", "dólar"
+    );
+
+    private static final List<String> SECURITY_OVERRIDE_KEYWORDS = List.of(
+            "accidente", "robo", "herido", "incendio", "atraco", "homicidio",
+            "agresión", "choque", "atropello", "hurto", "asesinato"
     );
 
     // Facebook pages — local Pasto sources
@@ -81,6 +87,11 @@ public class OsintService {
             "Pasto Denuncias",
             "Nariño Noticias La Original",
             "La Voz Del pueblo Noticias Nariño");
+
+    private static final ZoneId BOGOTA_ZONE = ZoneId.of("America/Bogota");
+
+    private volatile boolean rapidApiEnabled = true;
+    private volatile long rapidApiDisabledUntil = 0L;
 
     public OsintService(ReportRepository reportRepository,
                         OsintNewsArticleRepository newsArticleRepository,
@@ -139,7 +150,7 @@ public class OsintService {
         // Si publishedAt es null, se incluye igualmente (la IA y el hash evitarán ruido).
         List<OsintResultDTO> toProcess = rawResults.stream()
                 .filter(r -> r.getPublishedAt() == null
-                        || !r.getPublishedAt().isBefore(LocalDateTime.now().minusDays(3)))
+                        || !r.getPublishedAt().isBefore(LocalDateTime.now(BOGOTA_ZONE).minusDays(3)))
                 .limit(maxItemsPerExecution)
                 .toList();
 
@@ -171,7 +182,7 @@ public class OsintService {
 
                 // Verificar si el incidente estimado tiene más de 3 días
                 LocalDateTime estimatedDate = parseEstimatedDate(aiResult.getEstimatedDate());
-                if (estimatedDate != null && estimatedDate.isBefore(LocalDateTime.now().minusDays(3))) {
+                if (estimatedDate != null && estimatedDate.isBefore(LocalDateTime.now(BOGOTA_ZONE).minusDays(3))) {
                     log.debug("[OSINT] Incidente descartado por fecha estimada > 3d: '{}'", aiResult.getEstimatedDate());
                     discardedByAI++;
                     continue;
@@ -253,15 +264,16 @@ public class OsintService {
                 "%s"
 
                 === INSTRUCCIONES ===
-                1. Determina si el texto describe un incidente de seguridad REAL (robo, accidente, agresión, incendio, etc.)
-                2. RECHAZA: noticias políticas, eventos culturales, deportes, empleo, opiniones, rumores, chistes
-                3. Extrae la dirección física EXACTA mencionada (calle, barrio, lugar de referencia)
-                4. Escribe UN resumen conciso EN ESPAÑOL del incidente (máx. 2 oraciones)
-                5. Estima cuándo ocurrió (formato ISO 8601)
-                6. Asigna trustScore (0-100) según especificidad y credibilidad de la fuente
+                1. Determina si el texto describe un incidente de seguridad REAL (robo, accidente, agresión, incendio, homicidio, riña, etc.).
+                2. RECHAZA claramente irrelevantes: noticias políticas, eventos culturales, deportes, empleo, opiniones, rumores.
+                3. Si el texto mezcla contenido irrelevante con un incidente real de seguridad, PRIORIZA EL INCIDENTE y márcalo como isSecurityIncident=true.
+                4. Extrae la dirección física EXACTA mencionada (calle, barrio, lugar de referencia).
+                5. Escribe UN resumen conciso EN ESPAÑOL del incidente (máx. 2 oraciones).
+                6. Estima cuándo ocurrió (formato ISO 8601).
+                7. Asigna trustScore (0-100) según especificidad y credibilidad de la fuente.
 
                 === CATEGORÍAS ===
-                ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER
+                ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | VIOLENCE | FIRE | FRAUD | VANDALISM | OTHER
 
                 Responde SOLO con este JSON, sin texto adicional:
                 {"isSecurityIncident":<true/false>,"incidentType":"<TIPO>","exactAddress":"<dirección o vacío>","cleanSummary":"<resumen en español>","estimatedDate":"<ISO 8601 o vacío>","trustScore":<0-100>,"shouldVerify":<true si score>=60>}
@@ -325,7 +337,7 @@ public class OsintService {
         double deltaLat = dedupRadiusMeters / 111320.0;
         double deltaLng = dedupRadiusMeters / (111320.0 * Math.cos(Math.toRadians(lat)));
 
-        LocalDateTime since = LocalDateTime.now().minusHours(dedupHours);
+        LocalDateTime since = LocalDateTime.now(BOGOTA_ZONE).minusHours(dedupHours);
 
         return reportRepository.existsNearbyDuplicate(
                 type,
@@ -381,7 +393,7 @@ public class OsintService {
                 .status(status)
                 .trustScore(aiResult.getTrustScore())
                 .aiAnalysis("[OSINT Auto] " + aiResult.getCleanSummary())
-                .reportDate(LocalDateTime.now())
+                .reportDate(LocalDateTime.now(BOGOTA_ZONE))
                 .incidentDate(parseEstimatedDate(aiResult.getEstimatedDate()))
                 .build();
     }
@@ -444,6 +456,45 @@ public class OsintService {
     }
 
     // ═══════════════════════════════════════════════════════════
+    // RAPIDAPI EXECUTOR (CIRCUIT BREAKER)
+    // ═══════════════════════════════════════════════════════════
+
+    private String executeRapidApiCall(String url) {
+        if (!rapidApiEnabled) {
+            return null;
+        }
+
+        if (System.currentTimeMillis() < rapidApiDisabledUntil) {
+            log.debug("[OSINT-RAPIDAPI] Circuit breaker actived (cooldown) until {}", rapidApiDisabledUntil);
+            return null;
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-rapidapi-key", rapidApiKey);
+        headers.set("x-rapidapi-host", facebookHost);
+
+        HttpEntity<String> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, request, String.class);
+            return response.getBody();
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            if (e.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                rapidApiEnabled = false;
+                log.error("[OSINT-RAPIDAPI] FATAL: API key 401 — La fuente RapidAPI ha sido desactivada. Actualizar app.rapidapi.key en application.properties/env.");
+            } else if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                // Cooldown 60 mins
+                rapidApiDisabledUntil = System.currentTimeMillis() + (60 * 60 * 1000);
+                log.warn("[OSINT-RAPIDAPI] Rate Limit 429 — Circuit breaker activado por 60 min.");
+            } else {
+                log.warn("[OSINT-RAPIDAPI] Error HTTP: {} - {}", e.getStatusCode(), e.getMessage());
+            }
+            return null;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // SOURCE 1 (PRIORITY): Local Pasto FB pages
     // ═══════════════════════════════════════════════════════════
 
@@ -456,16 +507,7 @@ public class OsintService {
                         "https://%s/search/pages?query=%s",
                         facebookHost, pageName.replace(" ", "+"));
 
-                HttpHeaders headers = new HttpHeaders();
-                headers.set("x-rapidapi-key", rapidApiKey);
-                headers.set("x-rapidapi-host", facebookHost);
-
-                HttpEntity<String> request = new HttpEntity<>(headers);
-
-                ResponseEntity<String> response = restTemplate.exchange(
-                        url, HttpMethod.GET, request, String.class);
-
-                String body = response.getBody();
+                String body = executeRapidApiCall(url);
                 if (body == null) continue;
 
                 JsonNode root = objectMapper.readTree(body);
@@ -555,7 +597,7 @@ public class OsintService {
                 String link = extractXmlTag(item, "link");
                 String pubDateStr = extractXmlTag(item, "pubDate");
 
-                LocalDateTime pubDate = LocalDateTime.now();
+                LocalDateTime pubDate = LocalDateTime.now(BOGOTA_ZONE);
                 try {
                     if (!pubDateStr.isBlank()) {
                         pubDate = ZonedDateTime.parse(pubDateStr, DateTimeFormatter.RFC_1123_DATE_TIME)
@@ -595,18 +637,8 @@ public class OsintService {
                 "https://%s/search/posts?query=%s&count=10",
                 facebookHost, query);
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("x-rapidapi-key", rapidApiKey);
-        headers.set("x-rapidapi-host", facebookHost);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<String> request = new HttpEntity<>(headers);
-
         try {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url, HttpMethod.GET, request, String.class);
-
-            String body = response.getBody();
+            String body = executeRapidApiCall(url);
             if (body == null) return results;
 
             JsonNode root = objectMapper.readTree(body);
@@ -675,7 +707,7 @@ public class OsintService {
         } catch (Exception e) {
             // Fallback to current time
         }
-        return LocalDateTime.now();
+        return LocalDateTime.now(BOGOTA_ZONE);
     }
 
     private LocalDateTime parseEstimatedDate(String isoDate) {
@@ -698,6 +730,12 @@ public class OsintService {
     private boolean isIrrelevantContent(String content) {
         if (content == null || content.isBlank()) return true;
         String lower = content.toLowerCase();
+        
+        boolean hasOverride = SECURITY_OVERRIDE_KEYWORDS.stream().anyMatch(lower::contains);
+        if (hasOverride) {
+            return false; // Skip rejection if a strong security keyword is present
+        }
+        
         return REJECTION_KEYWORDS.stream().anyMatch(lower::contains);
     }
 

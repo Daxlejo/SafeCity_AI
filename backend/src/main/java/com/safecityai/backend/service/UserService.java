@@ -9,7 +9,9 @@ import com.safecityai.backend.dto.UserRegisterDTO;
 import com.safecityai.backend.dto.UserResponseDTO;
 import com.safecityai.backend.exception.ResourceNotFoundException;
 import com.safecityai.backend.model.User;
+import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.model.enums.UserRole;
+import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.security.JwtService;
 import java.time.LocalDateTime;
@@ -26,15 +28,18 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final ReportRepository reportRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final EmailService emailService;
 
     public UserService(UserRepository userRepository,
+            ReportRepository reportRepository,
             PasswordEncoder passwordEncoder,
             JwtService jwtService,
             EmailService emailService) {
         this.userRepository = userRepository;
+        this.reportRepository = reportRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.emailService = emailService;
@@ -43,7 +48,7 @@ public class UserService {
     // Recuperar perfil por email
     public UserResponseDTO getProfile(String email) {
         User user = findByEmail(email);
-        return toResponseDTO(user);
+        return toResponseDTOWithStats(user);
     }
 
     // Solicitar recuperación de contraseña
@@ -232,5 +237,14 @@ public class UserService {
                 .active(user.getActive())
                 .createdAt(user.getCreatedAt())
                 .build();
+    }
+
+    // Helper: convierte entidad a DTO con estadísticas agregadas (para /me)
+    private UserResponseDTO toResponseDTOWithStats(User user) {
+        UserResponseDTO dto = toResponseDTO(user);
+        dto.setReportCount(reportRepository.countByReportedById(user.getId()));
+        dto.setApprovedReports(reportRepository.countByReportedByIdAndStatus(user.getId(), ReportStatus.VERIFIED));
+        dto.setRejectedReports(reportRepository.countByReportedByIdAndStatus(user.getId(), ReportStatus.REJECTED));
+        return dto;
     }
 }
