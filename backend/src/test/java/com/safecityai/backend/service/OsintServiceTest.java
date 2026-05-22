@@ -77,8 +77,8 @@ class OsintServiceTest {
             OsintService spySvc = spy(osintService);
 
             OsintResultDTO rawResult = OsintResultDTO.builder()
-                    .title("Política")
-                    .content("El alcalde habló sobre presupuesto")
+                    .title("Gente")
+                    .content("Un perro se perdió en el barrio Lorenzo y los vecinos le dieron comida")
                     .sourceType(ReportSource.SOCIAL_MEDIA)
                     .detectedLocation("Pasto")
                     .publishedAt(LocalDateTime.now())
@@ -174,7 +174,7 @@ class OsintServiceTest {
             verify(reportRepository).save(captor.capture());
 
             Report created = captor.getValue();
-            assertThat(created.getSource()).isEqualTo(ReportSource.SOCIAL_MEDIA);
+            assertThat(created.getSource()).isEqualTo(ReportSource.OSINT_AUTO);
             assertThat(created.getIncidentType()).isEqualTo(IncidentType.ROBBERY);
             assertThat(created.getLatitude()).isEqualTo(1.2136);
             assertThat(created.getLongitude()).isEqualTo(-77.2784);

@@ -238,10 +238,10 @@ class IAClassificationServiceTest {
 
             iaService.classifyAsync(2L);
 
-            verify(reportRepository).delete(gibberishReport);
-            verify(notificationService).notifyReportDeleted(2L);
+            verify(reportRepository, atLeastOnce()).save(gibberishReport);
+            verify(notificationService).notifyReportUpdated(any(com.safecityai.backend.dto.ReportResponseDTO.class));
             verify(notificationUserService).createNotification(
-                    eq(owner), isNull(), eq("⚠️ Reporte rechazado"),
+                    eq(owner), eq(gibberishReport), eq("⚠️ Reporte rechazado"),
                     contains("rechazado"), eq("ALERT"));
         }
 

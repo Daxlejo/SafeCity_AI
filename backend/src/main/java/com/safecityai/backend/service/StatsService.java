@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
@@ -42,6 +43,14 @@ public class StatsService {
     private final ReportRepository reportRepository;
     private final UserRepository userRepository;
     private final ZoneRepository zoneRepository;
+
+    /**
+     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
+     * Used to dynamically build absolute photo URLs in DTO responses.
+     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
+     */
+    @Value("${app.base-url:http://localhost:8080}")
+    private String baseUrl;
 
     public StatsService(ReportRepository reportRepository,
                         UserRepository userRepository,
@@ -252,7 +261,7 @@ public class StatsService {
                         .source(r.getSource())
                         .latitude(r.getLatitude())
                         .longitude(r.getLongitude())
-                        .photoUrl(r.getPhotoUrl())
+                        .photoUrl(getFullPhotoUrl(r.getPhotoUrl()))
                         .trustScore(r.getTrustScore())
                         .zoneId(r.getZoneId())
                         .reportDate(r.getReportDate())
@@ -328,6 +337,23 @@ public class StatsService {
 
         return topN;
     }
+
+    // ═══════════════ PHOTO URL HELPER ═══════════════
+
+    /**
+     * Builds the absolute photo URL to return to the client.
+     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
+     *   for backward-compatibility with legacy DB rows.
+     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
+     * - Returns null if the stored value is null or blank.
+     */
+    private String getFullPhotoUrl(String photoUrl) {
+        if (photoUrl == null || photoUrl.isBlank()) {
+            return null;
+        }
+        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
+            return photoUrl;
+        }
+        return baseUrl + "/api/v1/uploads/" + photoUrl;
+    }
 }
-
-

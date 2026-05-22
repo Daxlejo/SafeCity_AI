@@ -62,8 +62,8 @@ public class FileUploadService {
                     "Formato no permitido. Solo se aceptan: " + ALLOWED_EXTENSIONS);
         }
 
-        // Generar nombre unico: uuid + extension original
-        String uniqueName = UUID.randomUUID().toString() + "." + extension;
+        // Generar nombre unico: uuid + extension original en minusculas
+        String uniqueName = UUID.randomUUID().toString() + "." + extension.toLowerCase();
 
         try {
             // Guardar archivo

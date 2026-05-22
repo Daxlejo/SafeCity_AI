@@ -49,6 +49,14 @@ public class IAClassificationService {
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
 
+    /**
+     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
+     * Used to dynamically build absolute photo URLs in DTO responses.
+     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
+     */
+    @Value("${app.base-url:http://localhost:8080}")
+    private String baseUrl;
+
     public IAClassificationService(ReportRepository reportRepository,
             UserRepository userRepository,
             NotificationService notificationService,
@@ -308,12 +316,13 @@ public class IAClassificationService {
      */
     private String encodeImageToBase64(String photoUrl) {
         try {
-            // photoUrl is typically "/uploads/filename.jpg" — extract just the filename
+            // Extract the bare filename in case the stored value is a full URL
             String filename = photoUrl.contains("/")
                     ? photoUrl.substring(photoUrl.lastIndexOf("/") + 1)
                     : photoUrl;
 
-            Path filePath = Paths.get(uploadDir, filename);
+            // Resolve the absolute path to guarantee correct lookup regardless of CWD
+            Path filePath = Paths.get(uploadDir).toAbsolutePath().normalize().resolve(filename);
 
             if (!Files.exists(filePath)) {
                 log.debug("[Pipeline] Image file not found: {}", filePath);
@@ -381,12 +390,31 @@ public class IAClassificationService {
                 .source(report.getSource())
                 .latitude(report.getLatitude())
                 .longitude(report.getLongitude())
-                .photoUrl(report.getPhotoUrl())
+                .photoUrl(getFullPhotoUrl(report.getPhotoUrl()))
                 .trustScore(report.getTrustScore())
                 .aiAnalysis(report.getAiAnalysis())
                 .zoneId(report.getZoneId())
                 .reportDate(report.getReportDate())
                 .build();
+    }
+
+    // ═══════════════ PHOTO URL HELPER ═══════════════
+
+    /**
+     * Builds the absolute photo URL to return to the client.
+     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
+     *   for backward-compatibility with legacy DB rows.
+     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
+     * - Returns null if the stored value is null or blank.
+     */
+    private String getFullPhotoUrl(String photoUrl) {
+        if (photoUrl == null || photoUrl.isBlank()) {
+            return null;
+        }
+        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
+            return photoUrl;
+        }
+        return baseUrl + "/api/v1/uploads/" + photoUrl;
     }
 
     // Agente 1: Helper para notificar estadísticas del usuario
