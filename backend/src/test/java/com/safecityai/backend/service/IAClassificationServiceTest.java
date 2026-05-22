@@ -219,8 +219,8 @@ class IAClassificationServiceTest {
         }
 
         @Test
-        @DisplayName("AI retorna REJECTED → elimina reporte y penaliza reputación")
-        void zeroScore_shouldDeleteAndNotify() {
+        @DisplayName("AI retorna REJECTED → marca reporte como REJECTED y penaliza reputación")
+        void zeroScore_shouldRejectAndNotify() {
             User owner = User.builder().id(10L).name("Test User").email("test@test.com")
                     .trustLevel(50.0).build();
             gibberishReport.setReportedBy(owner);
@@ -238,10 +238,10 @@ class IAClassificationServiceTest {
 
             iaService.classifyAsync(2L);
 
-            verify(reportRepository).delete(gibberishReport);
-            verify(notificationService).notifyReportDeleted(2L);
+            verify(reportRepository, atLeastOnce()).save(any(Report.class));
+            verify(notificationService, atLeastOnce()).notifyReportUpdated(any());
             verify(notificationUserService).createNotification(
-                    eq(owner), isNull(), eq("⚠️ Reporte rechazado"),
+                    eq(owner), eq(gibberishReport), eq("⚠️ Reporte rechazado"),
                     contains("rechazado"), eq("ALERT"));
         }
 

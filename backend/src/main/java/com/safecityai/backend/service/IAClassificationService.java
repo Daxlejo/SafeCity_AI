@@ -264,7 +264,7 @@ public class IAClassificationService {
                 IMAGE: If provided, analyze jointly. Corroborating image = significant score boost.
 
                 STATUS DECISION RULES (CRITICAL):
-                Debes clasificar este reporte como VERIFIED o REJECTED basándote en la evidencia y el Trust Level del usuario.
+                Debes clasificar este reporte como VERIFIED o REJECTED basándote en la evidencia y el Trust Level del usuario. Exclusivamente se debe verificar o rechazar el reporte.
                 SOLO responde PENDING si es absolutamente imposible deducir si el reporte es real o falso, o si falta evidencia visual crítica que no puede ser suplida por la confianza.
                 STATUS: score>=60 → VERIFIED | score<=30 → REJECTED | else → PENDING (only if strictly necessary)
 
