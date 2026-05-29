@@ -244,6 +244,7 @@ public class StatsService {
             case PENDING -> 0.5;     // Pendiente = media
             case RESOLVED -> 0.3;    // Resuelto = baja
             case REJECTED -> 0.1;    // Rechazado = minima
+            case EXPIRED -> 0.1;     // Expirado = minima
         };
     }
 

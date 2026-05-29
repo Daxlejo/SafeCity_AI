@@ -50,6 +50,25 @@ public class ReportController {
         return ResponseEntity.ok(quota);
     }
 
+    // GET /api/v1/reports/history → 200 OK
+    @GetMapping("/history")
+    @Operation(summary = "Historial de reportes", description = "Retorna el historial completo de reportes del usuario autenticado.")
+    @ApiResponse(responseCode = "200", description = "Historial obtenido")
+    public ResponseEntity<Page<ReportResponseDTO>> getReportHistory(
+            Authentication auth,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "reportDate") String sort,
+            @RequestParam(defaultValue = "DESC") String direction) {
+
+        String userEmail = auth.getName();
+        Sort.Direction sortDirection = Sort.Direction.fromString(direction);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sort));
+
+        Page<ReportResponseDTO> reports = reportService.getReportHistory(userEmail, pageable);
+        return ResponseEntity.ok(reports);
+    }
+
     // GET /api/v1/reports/{id} → 200 OK | 404 Not Found
     @GetMapping("/{id}")
     @Operation(summary = "Obtener reporte por ID", description = "Obtiene los detalles completos de un reporte específico, incluyendo resultados del análisis de la IA y trust score.")

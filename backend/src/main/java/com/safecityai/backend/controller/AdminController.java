@@ -26,12 +26,15 @@ public class AdminController {
     private final UserService userService;
     private final ReportService reportService;
     private final AdminLogService adminLogService;
+    private final com.safecityai.backend.service.ReportExpirationService reportExpirationService;
 
     public AdminController(UserService userService, ReportService reportService,
-                           AdminLogService adminLogService) {
+                           AdminLogService adminLogService,
+                           com.safecityai.backend.service.ReportExpirationService reportExpirationService) {
         this.userService = userService;
         this.reportService = reportService;
         this.adminLogService = adminLogService;
+        this.reportExpirationService = reportExpirationService;
     }
 
     // GET /api/v1/admin/users → listar todos los usuarios (paginado)
@@ -125,6 +128,31 @@ public class AdminController {
             "reportId", id,
             "newStatus", status
         ));
+    }
+
+    // ═══════════════ CONFIGURACIÓN DE EXPIRACIÓN ═══════════════
+
+    // GET /api/v1/admin/expiration-configs
+    @GetMapping("/expiration-configs")
+    public ResponseEntity<java.util.List<com.safecityai.backend.model.ReportExpirationConfig>> getExpirationConfigs() {
+        return ResponseEntity.ok(reportExpirationService.getAllConfigs());
+    }
+
+    // PUT /api/v1/admin/expiration-configs/{incidentType}?hours=...
+    @PutMapping("/expiration-configs/{incidentType}")
+    public ResponseEntity<com.safecityai.backend.model.ReportExpirationConfig> updateExpirationConfig(
+            @PathVariable com.safecityai.backend.model.enums.IncidentType incidentType,
+            @RequestParam Integer hours,
+            Authentication auth) {
+        com.safecityai.backend.model.ReportExpirationConfig updated = reportExpirationService.updateConfig(incidentType, hours);
+        
+        // Auditoría
+        User admin = userService.findByEmail(auth.getName());
+        adminLogService.log(admin.getId(), admin.getEmail(),
+                AdminAction.REPORT_STATUS_CHANGED, "ExpirationConfig", incidentType.name(),
+                "Nuevo tiempo de expiración (horas): " + hours);
+
+        return ResponseEntity.ok(updated);
     }
 
     // ═══════════════ AUDIT LOG ENDPOINTS ═══════════════

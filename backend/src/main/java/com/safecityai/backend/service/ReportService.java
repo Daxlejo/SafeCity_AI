@@ -134,6 +134,13 @@ public class ReportService {
                 .map(this::convertToDTO);
     }
 
+    @Transactional(readOnly = true)
+    public Page<ReportResponseDTO> getReportHistory(String userEmail, Pageable pageable) {
+        User user = userService.findByEmail(userEmail);
+        return reportRepository.findByReportedById(user.getId(), pageable)
+                .map(this::convertToDTO);
+    }
+
     // Actualización null-safe: solo modifica campos que el cliente envió
     @Transactional
     public ReportResponseDTO updateReport(Long id, ReportCreateDTO dto) {

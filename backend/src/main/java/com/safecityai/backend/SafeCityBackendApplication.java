@@ -3,7 +3,10 @@ package com.safecityai.backend;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import org.springframework.scheduling.annotation.EnableScheduling;
+
 @SpringBootApplication
+@EnableScheduling
 public class SafeCityBackendApplication {
 
 	public static void main(String[] args) {

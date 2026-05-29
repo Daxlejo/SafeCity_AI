@@ -76,4 +76,10 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     // Agente 1: Estadísticas de reportes del usuario
     long countByReportedById(Long userId);
     long countByReportedByIdAndStatus(Long userId, ReportStatus status);
+
+    // Agente 3: Para la expiración automática
+    List<Report> findByStatusIn(List<ReportStatus> statuses);
+
+    // Agente 3: Para el historial de usuario
+    Page<Report> findByReportedById(Long userId, Pageable pageable);
 }
