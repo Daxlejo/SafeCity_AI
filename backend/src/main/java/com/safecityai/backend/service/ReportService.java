@@ -34,14 +34,8 @@ public class ReportService {
     private final IAClassificationService iaClassificationService;
     private final GeocodingService geocodingService;
     private final UserService userService;
-
-    /**
-     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
-     * Used to dynamically build absolute photo URLs in DTO responses.
-     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
-     */
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
+    private final com.safecityai.backend.util.ReportMapper reportMapper;
+    private final com.safecityai.backend.util.PhotoUrlHelper photoUrlHelper;
 
     @Transactional
     public ReportResponseDTO createReport(ReportCreateDTO dto, String userEmail) {
@@ -87,7 +81,7 @@ public class ReportService {
         }
 
         Report savedReport = reportRepository.save(report);
-        ReportResponseDTO response = convertToDTO(savedReport);
+        ReportResponseDTO response = reportMapper.convertToDTO(savedReport);
 
         // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
         notificationService.notifyNewReport(response);
@@ -113,7 +107,7 @@ public class ReportService {
     public ReportResponseDTO getReportById(Long id) {
         log.debug("Buscando reporte con ID: {}", id);
         Report report = findReportOrThrow(id);
-        return convertToDTO(report);
+        return reportMapper.convertToDTO(report);
     }
 
     @Transactional(readOnly = true)
@@ -122,7 +116,7 @@ public class ReportService {
                 pageable.getPageNumber(), pageable.getPageSize());
 
         return reportRepository.findByStatusNot(ReportStatus.REJECTED, pageable)
-                .map(this::convertToDTO);
+                .map(reportMapper::convertToDTO);
     }
 
     @Transactional(readOnly = true)
@@ -131,14 +125,14 @@ public class ReportService {
                 pageable.getPageNumber(), pageable.getPageSize());
 
         return reportRepository.findAll(pageable)
-                .map(this::convertToDTO);
+                .map(reportMapper::convertToDTO);
     }
 
     @Transactional(readOnly = true)
     public Page<ReportResponseDTO> getReportHistory(String userEmail, Pageable pageable) {
         User user = userService.findByEmail(userEmail);
         return reportRepository.findByReportedById(user.getId(), pageable)
-                .map(this::convertToDTO);
+                .map(reportMapper::convertToDTO);
     }
 
     // Actualización null-safe: solo modifica campos que el cliente envió
@@ -149,7 +143,7 @@ public class ReportService {
         Report report = findReportOrThrow(id);
         updateEntityFields(report, dto);
         Report updatedReport = reportRepository.save(report);
-        ReportResponseDTO response = convertToDTO(updatedReport);
+        ReportResponseDTO response = reportMapper.convertToDTO(updatedReport);
 
         notificationService.notifyReportUpdated(response);
 
@@ -178,7 +172,7 @@ public class ReportService {
         report = reportRepository.save(report);
         
         // ¡CRUCIAL para que los usuarios vean el cambio de estado en vivo!
-        notificationService.notifyReportUpdated(convertToDTO(report));
+        notificationService.notifyReportUpdated(reportMapper.convertToDTO(report));
         
         log.info("Reporte ID: {} actualizado a status: {}", id, newStatus);
     }
@@ -278,7 +272,7 @@ public class ReportService {
         if (dto.getLongitude() != null)
             report.setLongitude(dto.getLongitude());
         if (dto.getPhotoUrl() != null)
-            report.setPhotoUrl(extractFilename(dto.getPhotoUrl()));
+            report.setPhotoUrl(photoUrlHelper.extractFilename(dto.getPhotoUrl()));
     }
 
     private Report convertToEntity(ReportCreateDTO dto) {
@@ -289,7 +283,7 @@ public class ReportService {
                 .source(dto.getSource())
                 .latitude(dto.getLatitude())
                 .longitude(dto.getLongitude())
-                .photoUrl(extractFilename(dto.getPhotoUrl()))
+                .photoUrl(photoUrlHelper.extractFilename(dto.getPhotoUrl()))
                 .zoneId(dto.getZoneId())
                 .status(ReportStatus.PENDING);
 
@@ -305,60 +299,4 @@ public class ReportService {
         return builder.build();
     }
 
-    private ReportResponseDTO convertToDTO(Report report) {
-        return ReportResponseDTO.builder()
-                .id(report.getId())
-                .description(report.getDescription())
-                .incidentType(report.getIncidentType())
-                .address(report.getAddress())
-                .status(report.getStatus())
-                .source(report.getSource())
-                .latitude(report.getLatitude())
-                .longitude(report.getLongitude())
-                .photoUrl(getFullPhotoUrl(report.getPhotoUrl()))
-                .trustScore(report.getTrustScore())
-                .aiAnalysis(report.getAiAnalysis())
-                .zoneId(report.getZoneId())
-                .reportDate(report.getReportDate())
-                .incidentDate(report.getIncidentDate())
-                .build();
-    }
-
-    // ═══════════════ PHOTO URL HELPERS ═══════════════
-
-    /**
-     * Extracts the raw filename from a photo URL string.
-     * If the client sends a full URL (e.g. "http://localhost:8080/api/v1/uploads/uuid.jpg"),
-     * only the last path segment is kept for DB storage.
-     * If the value is already a bare filename, it is returned as-is.
-     * Returns null if input is null or blank.
-     */
-    private String extractFilename(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        // If the value contains a slash, take everything after the last slash
-        if (photoUrl.contains("/")) {
-            return photoUrl.substring(photoUrl.lastIndexOf('/') + 1);
-        }
-        return photoUrl;
-    }
-
-    /**
-     * Builds the absolute photo URL to return to the client.
-     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
-     *   for backward-compatibility with legacy DB rows.
-     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
-     * - Returns null if the stored value is null or blank.
-     */
-    private String getFullPhotoUrl(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        // Backward-compatible: already a full URL
-        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            return photoUrl;
-        }
-        return baseUrl + "/api/v1/uploads/" + photoUrl;
-    }
 }

@@ -23,9 +23,17 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     @Query("SELECT r.incidentType, COUNT(r) FROM Report r GROUP BY r.incidentType")
     List<Object[]> countByIncidentType();
 
-    // Conteo por zona → para estadísticas por zona
+    // Conteo por zona → devuelve nombres directamente via JOIN
+    @Query("SELECT z.name, COUNT(r) FROM Report r JOIN Zone z ON r.zoneId = z.id GROUP BY z.name")
+    List<Object[]> countReportsByZoneName();
+
+    // Conteo por zona → para estadísticas por zona (legacy)
     @Query("SELECT r.zoneId, COUNT(r) FROM Report r WHERE r.zoneId IS NOT NULL GROUP BY r.zoneId")
     List<Object[]> countByZoneId();
+
+    // Conteo por status consolidado
+    @Query("SELECT r.status, COUNT(r) FROM Report r GROUP BY r.status")
+    List<Object[]> countGroupByStatus();
 
     // Conteo por status
     long countByStatus(ReportStatus status);
@@ -82,4 +90,14 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     // Agente 3: Para el historial de usuario
     Page<Report> findByReportedById(Long userId, Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE Report r SET r.status = :newStatus WHERE r.incidentType = :type AND r.status IN :oldStatuses AND r.reportDate < :thresholdDate")
+    int updateStatusForOlderThan(@org.springframework.data.repository.query.Param("type") IncidentType type,
+                                 @org.springframework.data.repository.query.Param("oldStatuses") List<ReportStatus> oldStatuses,
+                                 @org.springframework.data.repository.query.Param("thresholdDate") LocalDateTime thresholdDate,
+                                 @org.springframework.data.repository.query.Param("newStatus") ReportStatus newStatus);
+
+    @Query("SELECT r.status, COUNT(r) FROM Report r WHERE r.reportedBy.id = :userId GROUP BY r.status")
+    List<Object[]> countUserReportsByStatus(@org.springframework.data.repository.query.Param("userId") Long userId);
 }

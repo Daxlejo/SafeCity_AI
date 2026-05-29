@@ -9,11 +9,11 @@ import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
 import com.safecityai.backend.repository.UserRepository;
 import com.safecityai.backend.repository.ZoneRepository;
+import com.safecityai.backend.util.PhotoUrlHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -42,13 +42,18 @@ class StatsServiceTest {
     @Mock
     private ZoneRepository zoneRepository;
 
-    @InjectMocks
+    @Mock
+    private PhotoUrlHelper photoUrlHelper;
+
     private StatsService statsService;
 
     private List<Report> sampleReports;
 
     @BeforeEach
     void setUp() {
+        // Construct manually to include the PhotoUrlHelper dependency
+        statsService = new StatsService(reportRepository, userRepository, zoneRepository, photoUrlHelper);
+
         // Crear reportes de prueba en la misma celda geográfica (~200m)
         // Coordenadas base: 1.214, -77.281 (Pasto, Colombia)
         Report r1 = Report.builder()
@@ -108,7 +113,9 @@ class StatsServiceTest {
     @Test
     @DisplayName("getHeatmapData agrupa reportes cercanos en la misma celda")
     void getHeatmapData_shouldClusterNearbyReports() {
-        when(reportRepository.findAllWithCoordinates()).thenReturn(sampleReports);
+        // getHeatmapData() now calls findRecentWithFullCoordinates(since)
+        when(reportRepository.findRecentWithFullCoordinates(any(LocalDateTime.class)))
+                .thenReturn(sampleReports);
 
         List<HeatmapPointDTO> result = statsService.getHeatmapData();
 
@@ -120,7 +127,8 @@ class StatsServiceTest {
     @Test
     @DisplayName("getHeatmapData retorna weight basado en cantidad de reportes")
     void getHeatmapData_shouldUseReportCountAsWeight() {
-        when(reportRepository.findAllWithCoordinates()).thenReturn(sampleReports);
+        when(reportRepository.findRecentWithFullCoordinates(any(LocalDateTime.class)))
+                .thenReturn(sampleReports);
 
         List<HeatmapPointDTO> result = statsService.getHeatmapData();
 
@@ -136,7 +144,8 @@ class StatsServiceTest {
     @Test
     @DisplayName("getHeatmapData incluye incidentType del tipo más frecuente")
     void getHeatmapData_shouldIncludeMostCommonIncidentType() {
-        when(reportRepository.findAllWithCoordinates()).thenReturn(sampleReports);
+        when(reportRepository.findRecentWithFullCoordinates(any(LocalDateTime.class)))
+                .thenReturn(sampleReports);
 
         List<HeatmapPointDTO> result = statsService.getHeatmapData();
 
@@ -153,7 +162,8 @@ class StatsServiceTest {
     @Test
     @DisplayName("getHeatmapData con lista vacía retorna lista vacía")
     void getHeatmapData_shouldReturnEmptyListWhenNoReports() {
-        when(reportRepository.findAllWithCoordinates()).thenReturn(Collections.emptyList());
+        when(reportRepository.findRecentWithFullCoordinates(any(LocalDateTime.class)))
+                .thenReturn(Collections.emptyList());
 
         List<HeatmapPointDTO> result = statsService.getHeatmapData();
 

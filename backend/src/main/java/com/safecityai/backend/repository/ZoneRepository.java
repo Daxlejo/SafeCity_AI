@@ -18,4 +18,7 @@ public interface ZoneRepository extends JpaRepository<Zone, Long> {
 
     // SELECT * FROM zones ORDER BY report_count DESC
     List<Zone> findAllByOrderByReportCountDesc();
+
+    @org.springframework.data.jpa.repository.Query("SELECT z.id, z.name FROM Zone z WHERE z.id IN :ids")
+    List<Object[]> findAllNamesByIds(@org.springframework.data.repository.query.Param("ids") List<Long> ids);
 }

@@ -129,6 +129,12 @@
 		<!-- Correo vía Resend API HTTP: NO se necesita spring-boot-starter-mail.
 		     Render Free Tier bloquea puertos SMTP (25/465/587) desde sep 2025.
 		     EmailService usa RestTemplate (ya incluido en spring-boot-starter-web). -->
+
+		<!-- Apache HttpClient 5 para Connection Pooling del RestTemplate -->
+		<dependency>
+			<groupId>org.apache.httpcomponents.client5</groupId>
+			<artifactId>httpclient5</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>

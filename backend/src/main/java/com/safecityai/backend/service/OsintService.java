@@ -66,14 +66,6 @@ public class OsintService {
     @Value("${app.osint.dedup-hours:12}")
     private int dedupHours;
 
-    /**
-     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
-     * Used to dynamically build absolute photo URLs in DTO responses.
-     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
-     */
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
-
     // Palabras clave que descalifican un artículo SIN llamar a la IA (ahorra tokens)
     private static final List<String> REJECTION_KEYWORDS = List.of(
             "fútbol", "soccer", "deporte", "partido", "gol", "liga", "torneo",
@@ -101,13 +93,17 @@ public class OsintService {
     private volatile boolean rapidApiEnabled = true;
     private volatile long rapidApiDisabledUntil = 0L;
 
-    public OsintService(ReportRepository reportRepository,
+    private final com.safecityai.backend.util.ReportMapper reportMapper;
+
+    public OsintService(RestTemplate restTemplate,
+                        ReportRepository reportRepository,
                         OsintNewsArticleRepository newsArticleRepository,
                         GeocodingService geocodingService,
                         AIClient aiClient,
                         NotificationService notificationService,
-                        OsintConfigService osintConfigService) {
-        this.restTemplate = new RestTemplate();
+                        OsintConfigService osintConfigService,
+                        com.safecityai.backend.util.ReportMapper reportMapper) {
+        this.restTemplate = restTemplate;
         this.objectMapper = new ObjectMapper();
         this.reportRepository = reportRepository;
         this.newsArticleRepository = newsArticleRepository;
@@ -115,6 +111,7 @@ public class OsintService {
         this.aiClient = aiClient;
         this.notificationService = notificationService;
         this.osintConfigService = osintConfigService;
+        this.reportMapper = reportMapper;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -221,7 +218,7 @@ public class OsintService {
                 reportIds.add(saved.getId());
 
                 // Step 5: Broadcast new report via WebSocket
-                notificationService.notifyNewReport(convertToDTO(saved));
+                notificationService.notifyNewReport(reportMapper.convertToDTO(saved));
                 log.info("[OSINT] Report #{} created: {} at [{}, {}] (score: {})",
                         saved.getId(), aiResult.getIncidentType(),
                         coords[0], coords[1], aiResult.getTrustScore());
@@ -403,25 +400,6 @@ public class OsintService {
                 .aiAnalysis("[OSINT Auto] " + aiResult.getCleanSummary())
                 .reportDate(LocalDateTime.now(BOGOTA_ZONE))
                 .incidentDate(parseEstimatedDate(aiResult.getEstimatedDate()))
-                .build();
-    }
-
-    private ReportResponseDTO convertToDTO(Report report) {
-        return ReportResponseDTO.builder()
-                .id(report.getId())
-                .description(report.getDescription())
-                .incidentType(report.getIncidentType())
-                .address(report.getAddress())
-                .status(report.getStatus())
-                .source(report.getSource())
-                .latitude(report.getLatitude())
-                .longitude(report.getLongitude())
-                .photoUrl(getFullPhotoUrl(report.getPhotoUrl()))
-                .trustScore(report.getTrustScore())
-                .aiAnalysis(report.getAiAnalysis())
-                .zoneId(report.getZoneId())
-                .reportDate(report.getReportDate())
-                .incidentDate(report.getIncidentDate())
                 .build();
     }
 
@@ -775,22 +753,4 @@ public class OsintService {
         return text.length() > maxLength ? text.substring(0, maxLength) + "..." : text;
     }
 
-    // ═══════════════ PHOTO URL HELPER ═══════════════
-
-    /**
-     * Builds the absolute photo URL to return to the client.
-     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
-     *   for backward-compatibility with legacy DB rows.
-     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
-     * - Returns null if the stored value is null or blank.
-     */
-    private String getFullPhotoUrl(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            return photoUrl;
-        }
-        return baseUrl + "/api/v1/uploads/" + photoUrl;
-    }
 }

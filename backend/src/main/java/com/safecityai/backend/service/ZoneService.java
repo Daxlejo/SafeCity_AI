@@ -21,18 +21,12 @@ public class ZoneService {
 
     private final ZoneRepository zoneRepository;
     private final ReportRepository reportRepository;
+    private final com.safecityai.backend.util.ReportMapper reportMapper;
 
-    /**
-     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
-     * Used to dynamically build absolute photo URLs in DTO responses.
-     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
-     */
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
-
-    public ZoneService(ZoneRepository zoneRepository, ReportRepository reportRepository) {
+    public ZoneService(ZoneRepository zoneRepository, ReportRepository reportRepository, com.safecityai.backend.util.ReportMapper reportMapper) {
         this.zoneRepository = zoneRepository;
         this.reportRepository = reportRepository;
+        this.reportMapper = reportMapper;
     }
 
     // Listar todas las zonas
@@ -70,19 +64,7 @@ public class ZoneService {
         double maxLng = zone.getCenterLng() + radiusInDegrees;
 
         return reportRepository.findByArea(minLat, maxLat, minLng, maxLng).stream()
-                .map(r -> ReportResponseDTO.builder()
-                        .id(r.getId())
-                        .description(r.getDescription())
-                        .incidentType(r.getIncidentType())
-                        .address(r.getAddress())
-                        .status(r.getStatus())
-                        .source(r.getSource())
-                        .latitude(r.getLatitude())
-                        .longitude(r.getLongitude())
-                        .photoUrl(getFullPhotoUrl(r.getPhotoUrl()))
-                        .trustScore(r.getTrustScore())
-                        .reportDate(r.getReportDate())
-                        .build())
+                .map(reportMapper::convertToDTO)
                 .collect(Collectors.toList());
     }
 
@@ -134,22 +116,4 @@ public class ZoneService {
                 .build();
     }
 
-    // ═══════════════ PHOTO URL HELPER ═══════════════
-
-    /**
-     * Builds the absolute photo URL to return to the client.
-     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
-     *   for backward-compatibility with legacy DB rows.
-     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
-     * - Returns null if the stored value is null or blank.
-     */
-    private String getFullPhotoUrl(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            return photoUrl;
-        }
-        return baseUrl + "/api/v1/uploads/" + photoUrl;
-    }
 }

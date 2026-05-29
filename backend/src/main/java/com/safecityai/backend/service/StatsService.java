@@ -43,30 +43,41 @@ public class StatsService {
     private final ReportRepository reportRepository;
     private final UserRepository userRepository;
     private final ZoneRepository zoneRepository;
-
-    /**
-     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
-     * Used to dynamically build absolute photo URLs in DTO responses.
-     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
-     */
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
+    private final com.safecityai.backend.util.PhotoUrlHelper photoUrlHelper;
 
     public StatsService(ReportRepository reportRepository,
                         UserRepository userRepository,
-                        ZoneRepository zoneRepository) {
+                        ZoneRepository zoneRepository,
+                        com.safecityai.backend.util.PhotoUrlHelper photoUrlHelper) {
         this.reportRepository = reportRepository;
         this.userRepository = userRepository;
         this.zoneRepository = zoneRepository;
+        this.photoUrlHelper = photoUrlHelper;
     }
 
     // Resumen completo para el dashboard
     public StatsSummaryDTO getSummary() {
+        // Ejecutar 1 sola query para los status en lugar de 4
+        List<Object[]> statusCounts = reportRepository.countGroupByStatus();
+        long pending = 0;
+        long verified = 0;
+        long rejected = 0;
+        long total = 0;
+
+        for (Object[] row : statusCounts) {
+            ReportStatus status = (ReportStatus) row[0];
+            long count = (Long) row[1];
+            total += count;
+            if (status == ReportStatus.PENDING) pending = count;
+            else if (status == ReportStatus.VERIFIED) verified = count;
+            else if (status == ReportStatus.REJECTED) rejected = count;
+        }
+
         return StatsSummaryDTO.builder()
-                .totalReports(reportRepository.count())
-                .pendingReports(reportRepository.countByStatus(ReportStatus.PENDING))
-                .verifiedReports(reportRepository.countByStatus(ReportStatus.VERIFIED))
-                .rejectedReports(reportRepository.countByStatus(ReportStatus.REJECTED))
+                .totalReports(total)
+                .pendingReports(pending)
+                .verifiedReports(verified)
+                .rejectedReports(rejected)
                 .totalUsers(userRepository.count())
                 .totalZones(zoneRepository.count())
                 .reportsByType(getReportsByType())
@@ -85,14 +96,9 @@ public class StatsService {
 
     // Conteo por zona → devuelve nombres de zona, no IDs
     public Map<String, Long> getReportsByZone() {
-        return reportRepository.countByZoneId().stream()
+        return reportRepository.countReportsByZoneName().stream()
                 .collect(Collectors.toMap(
-                        row -> {
-                            Long zoneId = (Long) row[0];
-                            return zoneRepository.findById(zoneId)
-                                    .map(zone -> zone.getName())
-                                    .orElse("Zona " + zoneId);
-                        },
+                        row -> (String) row[0],
                         row -> (Long) row[1]
                 ));
     }
@@ -108,7 +114,9 @@ public class StatsService {
     //    e incidentType = tipo más frecuente en esa celda
     //
     public List<HeatmapPointDTO> getHeatmapData() {
-        List<Report> allReports = reportRepository.findAllWithCoordinates();
+        // Limitar a ultimos 90 dias para no colapsar la memoria
+        LocalDateTime since = LocalDateTime.now().minusDays(90);
+        List<Report> allReports = reportRepository.findRecentWithFullCoordinates(since);
         return buildHeatmapFromReports(allReports);
     }
 
@@ -262,7 +270,7 @@ public class StatsService {
                         .source(r.getSource())
                         .latitude(r.getLatitude())
                         .longitude(r.getLongitude())
-                        .photoUrl(getFullPhotoUrl(r.getPhotoUrl()))
+                        .photoUrl(photoUrlHelper.getFullPhotoUrl(r.getPhotoUrl()))
                         .trustScore(r.getTrustScore())
                         .zoneId(r.getZoneId())
                         .reportDate(r.getReportDate())
@@ -339,22 +347,4 @@ public class StatsService {
         return topN;
     }
 
-    // ═══════════════ PHOTO URL HELPER ═══════════════
-
-    /**
-     * Builds the absolute photo URL to return to the client.
-     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
-     *   for backward-compatibility with legacy DB rows.
-     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
-     * - Returns null if the stored value is null or blank.
-     */
-    private String getFullPhotoUrl(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            return photoUrl;
-        }
-        return baseUrl + "/api/v1/uploads/" + photoUrl;
-    }
 }

@@ -38,9 +38,11 @@ public class GeocodingService {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final java.util.concurrent.ConcurrentHashMap<String, String> reverseCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, double[]> forwardCache = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public GeocodingService() {
-        this.restTemplate = new RestTemplate();
+    public GeocodingService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -59,6 +61,10 @@ public class GeocodingService {
     public String reverseGeocode(Double lat, Double lng) {
         if (lat == null || lng == null) {
             return null;
+        }
+        String cacheKey = lat + "," + lng;
+        if (reverseCache.containsKey(cacheKey)) {
+            return reverseCache.get(cacheKey);
         }
 
         try {
@@ -93,19 +99,27 @@ public class GeocodingService {
                     : null;
 
             if (specificArea != null && city != null) {
-                return specificArea + ", " + city;
+                String result = specificArea + ", " + city;
+                reverseCache.put(cacheKey, result);
+                return result;
             } else if (specificArea != null) {
+                reverseCache.put(cacheKey, specificArea);
                 return specificArea;
             } else if (city != null) {
+                reverseCache.put(cacheKey, city);
                 return city;
             }
 
-            return formatFallback(lat, lng);
+            String fallback = formatFallback(lat, lng);
+            reverseCache.put(cacheKey, fallback);
+            return fallback;
 
         } catch (Exception e) {
             // NUNCA rompemos el flujo del reporte por un error de geocoding
             log.warn("[Geocoding] Error resolviendo ({}, {}): {}", lat, lng, e.getMessage());
-            return formatFallback(lat, lng);
+            String fallback = formatFallback(lat, lng);
+            reverseCache.put(cacheKey, fallback);
+            return fallback;
         }
     }
 
@@ -119,6 +133,7 @@ public class GeocodingService {
      */
     public double[] geocode(String address) {
         if (address == null || address.isBlank()) return null;
+        if (forwardCache.containsKey(address)) return forwardCache.get(address);
 
         try {
             String url = String.format(NOMINATIM_SEARCH_URL, address.replace(" ", "+"));
@@ -137,7 +152,9 @@ public class GeocodingService {
                 JsonNode first = root.get(0);
                 double lat = first.path("lat").asDouble();
                 double lon = first.path("lon").asDouble();
-                return new double[]{lat, lon};
+                double[] coords = new double[]{lat, lon};
+                forwardCache.put(address, coords);
+                return coords;
             }
         } catch (Exception e) {
             log.warn("[Geocoding] Error resolviendo '{}': {}", address, e.getMessage());

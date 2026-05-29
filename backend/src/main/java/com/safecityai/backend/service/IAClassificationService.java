@@ -42,6 +42,7 @@ public class IAClassificationService {
     private final NotificationService notificationService;
     private final NotificationUserService notificationUserService;
     private final AIClient aiClient;
+    private final com.safecityai.backend.util.ReportMapper reportMapper;
 
     private static final double PENALTY_REJECTED = 5.0;
     private static final double BONUS_VERIFIED = 2.0;
@@ -49,24 +50,18 @@ public class IAClassificationService {
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
 
-    /**
-     * Backend base URL (e.g. "https://safecity-ai-backend.onrender.com").
-     * Used to dynamically build absolute photo URLs in DTO responses.
-     * Configured via: app.base-url=${APP_BASE_URL:http://localhost:8080}
-     */
-    @Value("${app.base-url:http://localhost:8080}")
-    private String baseUrl;
-
     public IAClassificationService(ReportRepository reportRepository,
             UserRepository userRepository,
             NotificationService notificationService,
             NotificationUserService notificationUserService,
-            AIClient aiClient) {
+            AIClient aiClient,
+            com.safecityai.backend.util.ReportMapper reportMapper) {
         this.reportRepository = reportRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.notificationUserService = notificationUserService;
         this.aiClient = aiClient;
+        this.reportMapper = reportMapper;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -164,7 +159,7 @@ public class IAClassificationService {
         }
 
         // Broadcast WebSocket DESPUÉS del commit para evitar notificaciones fantasma
-        ReportResponseDTO dto = convertToDTO(report);
+        ReportResponseDTO dto = reportMapper.convertToDTO(report);
         broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
         
         // Agente 1: Broadcast stats del usuario
@@ -190,7 +185,7 @@ public class IAClassificationService {
         log.info("[IA-Async] Report #{} REJECTED (score: {})", report.getId(), result.getTrustScore());
 
         // Broadcast WebSocket DESPUÉS del commit
-        ReportResponseDTO dto = convertToDTO(report);
+        ReportResponseDTO dto = reportMapper.convertToDTO(report);
         broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
         
         // Agente 1: Broadcast stats del usuario
@@ -214,7 +209,7 @@ public class IAClassificationService {
         }
 
         // Broadcast WebSocket DESPUÉS del commit
-        ReportResponseDTO dto = convertToDTO(report);
+        ReportResponseDTO dto = reportMapper.convertToDTO(report);
         broadcastAfterCommit(() -> notificationService.notifyReportUpdated(dto));
         
         // Agente 1: Broadcast stats del usuario
@@ -380,53 +375,28 @@ public class IAClassificationService {
         }
     }
 
-    private ReportResponseDTO convertToDTO(Report report) {
-        return ReportResponseDTO.builder()
-                .id(report.getId())
-                .description(report.getDescription())
-                .incidentType(report.getIncidentType())
-                .address(report.getAddress())
-                .status(report.getStatus())
-                .source(report.getSource())
-                .latitude(report.getLatitude())
-                .longitude(report.getLongitude())
-                .photoUrl(getFullPhotoUrl(report.getPhotoUrl()))
-                .trustScore(report.getTrustScore())
-                .aiAnalysis(report.getAiAnalysis())
-                .zoneId(report.getZoneId())
-                .reportDate(report.getReportDate())
-                .build();
-    }
-
-    // ═══════════════ PHOTO URL HELPER ═══════════════
-
-    /**
-     * Builds the absolute photo URL to return to the client.
-     * - If stored value is already a full URL (starts with http:// or https://), returns it unchanged
-     *   for backward-compatibility with legacy DB rows.
-     * - Otherwise, prepends baseUrl + "/api/v1/uploads/" to the raw filename.
-     * - Returns null if the stored value is null or blank.
-     */
-    private String getFullPhotoUrl(String photoUrl) {
-        if (photoUrl == null || photoUrl.isBlank()) {
-            return null;
-        }
-        if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            return photoUrl;
-        }
-        return baseUrl + "/api/v1/uploads/" + photoUrl;
-    }
-
     // Agente 1: Helper para notificar estadísticas del usuario
     private void broadcastUserStats(User owner) {
         if (owner == null) return;
         
+        List<Object[]> statusCounts = reportRepository.countUserReportsByStatus(owner.getId());
+        long total = 0;
+        long verified = 0;
+        long rejected = 0;
+        for (Object[] row : statusCounts) {
+            ReportStatus st = (ReportStatus) row[0];
+            long count = ((Number) row[1]).longValue();
+            total += count;
+            if (st == ReportStatus.VERIFIED) verified = count;
+            else if (st == ReportStatus.REJECTED) rejected = count;
+        }
+
         UserStatsDTO stats = UserStatsDTO.builder()
                 .userId(owner.getId())
                 .trustLevel(owner.getTrustLevel())
-                .reportCount(reportRepository.countByReportedById(owner.getId()))
-                .approvedReports(reportRepository.countByReportedByIdAndStatus(owner.getId(), ReportStatus.VERIFIED))
-                .rejectedReports(reportRepository.countByReportedByIdAndStatus(owner.getId(), ReportStatus.REJECTED))
+                .reportCount(total)
+                .approvedReports(verified)
+                .rejectedReports(rejected)
                 .build();
                 
         broadcastAfterCommit(() -> notificationService.notifyUserStatsUpdated(stats));

@@ -9,6 +9,8 @@ import com.safecityai.backend.model.enums.IncidentType;
 import com.safecityai.backend.model.enums.ReportSource;
 import com.safecityai.backend.model.enums.ReportStatus;
 import com.safecityai.backend.repository.ReportRepository;
+import com.safecityai.backend.util.PhotoUrlHelper;
+import com.safecityai.backend.util.ReportMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,12 +47,15 @@ class ReportServiceTest {
     @Mock private IAClassificationService iaClassificationService;
     @Mock private GeocodingService geocodingService;
     @Mock private UserService userService;
+    @Mock private ReportMapper reportMapper;
+    @Mock private PhotoUrlHelper photoUrlHelper;
 
     @InjectMocks
     private ReportService reportService;
 
     private ReportCreateDTO validDTO;
     private Report savedReport;
+    private ReportResponseDTO savedReportDTO;
     private User testUser;
 
     @BeforeEach
@@ -80,6 +85,18 @@ class ReportServiceTest {
                 .reportDate(LocalDateTime.now())
                 .build();
 
+        savedReportDTO = ReportResponseDTO.builder()
+                .id(1L)
+                .description(savedReport.getDescription())
+                .incidentType(savedReport.getIncidentType())
+                .address(savedReport.getAddress())
+                .status(savedReport.getStatus())
+                .source(savedReport.getSource())
+                .latitude(savedReport.getLatitude())
+                .longitude(savedReport.getLongitude())
+                .reportDate(savedReport.getReportDate())
+                .build();
+
         testUser = User.builder()
                 .id(10L)
                 .name("Test User")
@@ -102,7 +119,9 @@ class ReportServiceTest {
         @Test
         @DisplayName("DTO válido → crea reporte y retorna DTO de respuesta")
         void validDTO_shouldCreateReport() {
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             ReportResponseDTO result = reportService.createReport(validDTO, null);
 
@@ -116,8 +135,10 @@ class ReportServiceTest {
         @Test
         @DisplayName("Con email de usuario → vincula reportedBy")
         void withUserEmail_shouldLinkUser() {
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(userService.findByEmail("test@example.com")).thenReturn(testUser);
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             reportService.createReport(validDTO, "test@example.com");
 
@@ -129,7 +150,9 @@ class ReportServiceTest {
         @Test
         @DisplayName("Sin email → reportedBy queda null (no crashea)")
         void withoutEmail_shouldNotCrash() {
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             ReportResponseDTO result = reportService.createReport(validDTO, null);
 
@@ -140,7 +163,9 @@ class ReportServiceTest {
         @Test
         @DisplayName("Notifica nuevo reporte por WebSocket")
         void shouldNotifyNewReport() {
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             reportService.createReport(validDTO, null);
 
@@ -150,7 +175,9 @@ class ReportServiceTest {
         @Test
         @DisplayName("Crea reporte y lanza clasificación IA async")
         void shouldTriggerAsyncClassification() {
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             reportService.createReport(validDTO, null);
 
@@ -165,9 +192,11 @@ class ReportServiceTest {
         @DisplayName("Con GPS sin dirección → usa geocoding inverso")
         void withGPSNoAddress_shouldReverseGeocode() {
             validDTO.setAddress(null);
+            lenient().when(photoUrlHelper.extractFilename(any())).thenReturn(null);
             when(geocodingService.reverseGeocode(anyDouble(), anyDouble()))
                     .thenReturn("Barrio Anganoy, Pasto");
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             reportService.createReport(validDTO, null);
 
@@ -183,6 +212,7 @@ class ReportServiceTest {
         @DisplayName("ID existente → retorna DTO")
         void existingId_shouldReturnDTO() {
             when(reportRepository.findById(1L)).thenReturn(Optional.of(savedReport));
+            when(reportMapper.convertToDTO(savedReport)).thenReturn(savedReportDTO);
 
             ReportResponseDTO result = reportService.getReportById(1L);
 
@@ -210,6 +240,7 @@ class ReportServiceTest {
             Pageable pageable = PageRequest.of(0, 20);
             Page<Report> page = new PageImpl<>(List.of(savedReport));
             when(reportRepository.findByStatusNot(ReportStatus.REJECTED, pageable)).thenReturn(page);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             Page<ReportResponseDTO> result = reportService.getAllReports(pageable);
 
@@ -252,6 +283,7 @@ class ReportServiceTest {
         void shouldUpdateStatusAndNotify() {
             when(reportRepository.findById(1L)).thenReturn(Optional.of(savedReport));
             when(reportRepository.save(any(Report.class))).thenReturn(savedReport);
+            when(reportMapper.convertToDTO(any(Report.class))).thenReturn(savedReportDTO);
 
             reportService.updateStatus(1L, ReportStatus.VERIFIED);
 

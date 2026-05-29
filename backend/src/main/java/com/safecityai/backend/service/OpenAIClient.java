@@ -55,8 +55,8 @@ public class OpenAIClient implements AIClient {
     private final ConcurrentHashMap<String, IAClassificationDTO> classificationCache = new ConcurrentHashMap<>();
     private static final int MAX_CACHE_SIZE = 200;
 
-    public OpenAIClient() {
-        this.restTemplate = new RestTemplate();
+    public OpenAIClient(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
         this.objectMapper = new ObjectMapper();
     }
 

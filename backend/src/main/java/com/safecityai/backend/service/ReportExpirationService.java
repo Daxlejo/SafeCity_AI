@@ -56,25 +56,18 @@ public class ReportExpirationService {
     public void expireOldReports() {
         log.info("Ejecutando job de expiración de reportes...");
         List<ReportExpirationConfig> configs = configRepository.findAll();
-        Map<IncidentType, Integer> expirationMap = configs.stream()
-                .collect(Collectors.toMap(ReportExpirationConfig::getIncidentType, ReportExpirationConfig::getExpirationHours));
-
-        // Buscar reportes que puedan expirar (activos: PENDING, VERIFIED)
-        List<ReportStatus> activeStatuses = List.of(ReportStatus.PENDING, ReportStatus.VERIFIED);
-        List<Report> activeReports = reportRepository.findByStatusIn(activeStatuses);
         
+        List<ReportStatus> activeStatuses = List.of(ReportStatus.PENDING, ReportStatus.VERIFIED);
         int expiredCount = 0;
         LocalDateTime now = LocalDateTime.now();
 
-        for (Report report : activeReports) {
-            Integer expirationHours = expirationMap.get(report.getIncidentType());
+        for (ReportExpirationConfig config : configs) {
+            Integer expirationHours = config.getExpirationHours();
             if (expirationHours != null && expirationHours > 0) {
-                // reportDate (creation) + expirationHours
-                LocalDateTime expiresAt = report.getReportDate().plusHours(expirationHours);
-                if (now.isAfter(expiresAt)) {
-                    reportService.updateStatus(report.getId(), ReportStatus.EXPIRED);
-                    expiredCount++;
-                }
+                LocalDateTime thresholdDate = now.minusHours(expirationHours);
+                int updated = reportRepository.updateStatusForOlderThan(
+                        config.getIncidentType(), activeStatuses, thresholdDate, ReportStatus.EXPIRED);
+                expiredCount += updated;
             }
         }
         

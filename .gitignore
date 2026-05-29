@@ -43,3 +43,6 @@ graphify-out/
 .agents/
 
 
+### Node / Frontend ###
+node_modules/
+**/node_modules/
