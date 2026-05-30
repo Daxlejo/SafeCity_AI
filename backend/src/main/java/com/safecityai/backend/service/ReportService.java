@@ -83,18 +83,19 @@ public class ReportService {
         Report savedReport = reportRepository.save(report);
         ReportResponseDTO response = reportMapper.convertToDTO(savedReport);
 
-        // Notificar DESPUÉS del save() para garantizar que el reporte existe en BD
-        notificationService.notifyNewReport(response);
-
-        // ═══════════════ IA: CLASIFICAR EN BACKGROUND (ASYNC) ═══════════════
-        // classifyAsync() corre en otro hilo (Thread Pool "iaExecutor")
-        // IMPORTANTE: Registramos la llamada para DESPUÉS del commit de la transacción.
-        // Si llamamos classifyAsync() directamente aquí, el @Async corre en otro hilo
-        // pero la transacción de createReport AÚN NO ha hecho commit → "Reporte no encontrado".
+        // ═══════════════ WEBSOCKET + IA: DESPUÉS DEL COMMIT ═══════════════
+        // IMPORTANTE: Tanto la notificación WebSocket como la clasificación IA
+        // deben ejecutarse DESPUÉS del commit de la transacción.
+        // - WebSocket: si se envía antes del commit, los clientes reciben el evento
+        //   pero el reporte aún no existe en BD → requests GET fallan con 404.
+        // - IA Async: corre en otro hilo y necesita leer el reporte de BD.
         final Long newReportId = savedReport.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 1) Broadcast WebSocket: el reporte ya está en BD
+                notificationService.notifyNewReport(response);
+                // 2) Clasificación IA en background
                 iaClassificationService.classifyAsync(newReportId);
             }
         });
@@ -285,7 +286,7 @@ public class ReportService {
                 .longitude(dto.getLongitude())
                 .photoUrl(photoUrlHelper.extractFilename(dto.getPhotoUrl()))
                 .zoneId(dto.getZoneId())
-                .status(ReportStatus.PENDING);
+                .status(ReportStatus.VERIFIED);
 
         // Parsear fecha del incidente si la enviaron
         if (dto.getIncidentDate() != null && !dto.getIncidentDate().isBlank()) {
