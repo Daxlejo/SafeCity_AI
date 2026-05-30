@@ -384,9 +384,9 @@ public class OsintService {
     // ═══════════════════════════════════════════════════════════
 
     private Report buildReportFromAI(OsintResultDTO raw, OsintAIResultDTO aiResult, double[] coords) {
-        ReportStatus status = aiResult.getTrustScore() >= 60 && aiResult.isShouldVerify()
+        ReportStatus status = aiResult.getTrustScore() >= 30
                 ? ReportStatus.VERIFIED
-                : ReportStatus.PENDING;
+                : ReportStatus.REJECTED;
 
         return Report.builder()
                 .description(aiResult.getCleanSummary())

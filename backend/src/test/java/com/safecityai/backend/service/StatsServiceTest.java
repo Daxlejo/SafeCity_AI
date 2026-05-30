@@ -73,7 +73,7 @@ class StatsServiceTest {
                 .latitude(1.2142)
                 .longitude(-77.2812)
                 .incidentType(IncidentType.ROBBERY)
-                .status(ReportStatus.PENDING)
+                .status(ReportStatus.VERIFIED)
                 .source(ReportSource.CITIZEN_TEXT)
                 .description("Otro robo cerca")
                 .address("Calle 19")

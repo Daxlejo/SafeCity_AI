@@ -81,7 +81,7 @@ class ReportServiceTest {
                 .source(validDTO.getSource())
                 .latitude(validDTO.getLatitude())
                 .longitude(validDTO.getLongitude())
-                .status(ReportStatus.PENDING)
+                .status(ReportStatus.VERIFIED)
                 .reportDate(LocalDateTime.now())
                 .build();
 
@@ -129,7 +129,7 @@ class ReportServiceTest {
             assertThat(result.getId()).isEqualTo(1L);
             assertThat(result.getDescription()).isEqualTo(validDTO.getDescription());
             assertThat(result.getIncidentType()).isEqualTo(IncidentType.ACCIDENT);
-            assertThat(result.getStatus()).isEqualTo(ReportStatus.PENDING);
+            assertThat(result.getStatus()).isEqualTo(ReportStatus.VERIFIED);
         }
 
         @Test

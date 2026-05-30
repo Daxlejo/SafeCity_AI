@@ -65,7 +65,7 @@ class IAClassificationServiceTest {
                 .source(ReportSource.CITIZEN_TEXT)
                 .latitude(1.2136)
                 .longitude(-77.2811)
-                .status(ReportStatus.PENDING)
+                .status(ReportStatus.VERIFIED)
                 .build();
 
         gibberishReport = Report.builder()
@@ -74,7 +74,7 @@ class IAClassificationServiceTest {
                 .incidentType(IncidentType.OTHER)
                 .address("Test")
                 .source(ReportSource.CITIZEN_TEXT)
-                .status(ReportStatus.PENDING)
+                .status(ReportStatus.VERIFIED)
                 .build();
     }
 

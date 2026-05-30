@@ -122,7 +122,10 @@ public class IAClassificationService {
 
             User reportOwner = report.getReportedBy();
             ReportStatus decision = result.getStatusDecision() != null
-                    ? result.getStatusDecision() : ReportStatus.PENDING;
+                    ? result.getStatusDecision() : ReportStatus.VERIFIED;
+            if (decision == ReportStatus.PENDING) {
+                decision = ReportStatus.VERIFIED;
+            }
 
             switch (decision) {
                 case VERIFIED -> handleVerified(report, reportOwner, result, typeChanged, originalType);
@@ -267,14 +270,13 @@ public class IAClassificationService {
                 IMAGE: If provided, analyze jointly. Corroborating image = significant score boost.
 
                 STATUS DECISION RULES (CRITICAL):
-                Debes clasificar este reporte como VERIFIED o REJECTED basándote en la evidencia y el Trust Level del usuario.
-                SOLO responde PENDING si es absolutamente imposible deducir si el reporte es real o falso, o si falta evidencia visual crítica que no puede ser suplida por la confianza.
-                STATUS: score>=60 → VERIFIED | score<=30 → REJECTED | else → PENDING (only if strictly necessary)
+                Debes clasificar este reporte como VERIFIED o REJECTED basándote en la evidencia y el Trust Level del usuario. No uses PENDING.
+                STATUS: score>=30 → VERIFIED | score<30 → REJECTED
 
                 CATEGORIES: ROBBERY | ACCIDENT | TRAFFIC | TRANSIT_OP | OTHER
 
                 OUTPUT (JSON only, no extra text):
-                {"trustScore":<0-100>,"suggestedType":"<CATEGORY>","reasoning":"<1 sentence in Spanish>","statusDecision":"<PENDING|REJECTED|VERIFIED>"}
+                {"trustScore":<0-100>,"suggestedType":"<CATEGORY>","reasoning":"<1 sentence in Spanish>","statusDecision":"<REJECTED|VERIFIED>"}
                 """.formatted(userRole, userTrustLevel, trustPolicy, reputationLine);
     }
 
@@ -413,8 +415,7 @@ public class IAClassificationService {
 
         ReportStatus statusDecision;
         if (score <= 30.0) statusDecision = ReportStatus.REJECTED;
-        else if (score >= 60.0) statusDecision = ReportStatus.VERIFIED;
-        else statusDecision = ReportStatus.PENDING;
+        else statusDecision = ReportStatus.VERIFIED;
 
         return IAClassificationDTO.builder()
                 .reportId(report.getId())
